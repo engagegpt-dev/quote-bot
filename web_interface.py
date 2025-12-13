@@ -461,10 +461,10 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
 
         # Try multiple ways to find the Quote/Retweet with comment menu item (diff languages/markup)
         quote_selectors = [
-            '[data-testid="Dropdown"] [role="menuitem"]:has-text("Quote")',
-            '[data-testid="Dropdown"] [role="menuitem"]:nth-child(2)',
-            'div[role="menuitem"]:has-text("Quote")',
-            'div[role="menuitem"]:nth-child(2)'
+            'a[href="/compose/post"][role="menuitem"]',
+            'a[role="menuitem"]:has-text("Quote")',
+            '[role="menuitem"]:has-text("Quote")',
+            '[role="menuitem"]:nth-child(2)'
         ]
         quote_btn = None
         for selector in quote_selectors:
