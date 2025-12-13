@@ -250,13 +250,13 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
         await page.goto(tweet_url)
         await page.wait_for_timeout(3000)
 
-        retweet_btn = await page.wait_for_selector('[data-testid="retweet"]', timeout=5000)
+        retweet_btn = await page.wait_for_selector('[data-testid="retweet"]', timeout=10000)
         await retweet_btn.click()
-        await page.wait_for_timeout(2000)
+        await page.wait_for_timeout(5000)
 
         quote_btn = await page.wait_for_selector('[data-testid="Dropdown"] [role="menuitem"]:nth-child(2)', timeout=3000)
         await quote_btn.click()
-        await page.wait_for_timeout(2000)
+        await page.wait_for_timeout(5000)
 
         textarea = await page.wait_for_selector('div[role="textbox"][data-testid^="tweetTextarea"]', timeout=3000)
         await textarea.click()
