@@ -480,10 +480,12 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
             await save_debug_info(page, 'quote_menuitem_not_found')
             return False
 
-        # Movimento mouse più umano
-        await page.hover('div[role="menuitem"]:has-text("Quote")')
-        await page.wait_for_timeout(300)
-        await quote_btn.click()
+        # Prova a cliccare direttamente usando JavaScript
+        log_message("Attempting to click Quote button with JavaScript")
+        try:
+            await page.evaluate('document.querySelector("a[href=\"/compose/post\"][role=\"menuitem\"]").click()')
+        except:
+            await quote_btn.click()
         await page.wait_for_timeout(4000)
         
         # Controlla se siamo ancora sul tweet
