@@ -544,8 +544,9 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
         await page.wait_for_timeout(1000)
 
         post_btn_selectors = [
+            'button[data-testid="tweetButton"]',
             'button[data-testid="tweetButtonInline"]',
-            'button[data-testid="tweetButton"]'
+            'div[data-testid="tweetButton"]'
         ]
         post_clicked = False
         for selector in post_btn_selectors:
