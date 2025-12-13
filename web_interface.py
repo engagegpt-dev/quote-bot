@@ -327,6 +327,12 @@ async def login_with_auth_token(context, auth_token: str):
             }
         ]
         await context.add_cookies(cookies)
+        # Log cookies present in context for debugging
+        try:
+            current_cookies = await context.cookies()
+            log_message(f"Auth cookies set: {len(current_cookies)} cookies")
+        except Exception as e:
+            log_message(f"Could not read context cookies after set: {e}")
         return True
     except Exception as e:
         log_message(f"Auth token login failed: {e}")
@@ -387,8 +393,51 @@ async def save_debug_info(page, label: str):
 async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: str = ""):
     try:
         log_message(f"Processing tweet: {tweet_url}")
-        await page.goto(tweet_url)
+        # Navigate and capture response status and final URL
+        try:
+            response = await page.goto(tweet_url, wait_until='networkidle')
+            if response:
+                status = response.status
+                log_message(f"Navigation response status: {status}")
+            else:
+                log_message("Navigation response: None")
+        except Exception as e:
+            log_message(f"Navigation error: {e}")
+            try:
+                await save_debug_info(page, 'navigation_error')
+            except:
+                pass
+            return False
         await page.wait_for_timeout(3000)
+
+        # If navigation redirected to login or another location, capture debug info
+        try:
+            current_url = page.url
+            log_message(f"Current page URL after goto: {current_url}")
+            if not current_url or tweet_url not in current_url:
+                log_message(f"Unexpected URL after navigation: {current_url}")
+                try:
+                    await save_debug_info(page, 'unexpected_url_after_goto')
+                except:
+                    pass
+                # Try alternative domain (twitter.com) and a retry
+                try:
+                    alt_tweet = tweet_url.replace('x.com', 'twitter.com') if 'x.com' in tweet_url else tweet_url
+                    log_message(f"Retrying navigation to alternative URL: {alt_tweet}")
+                    response2 = await page.goto(alt_tweet, wait_until='networkidle')
+                    if response2:
+                        log_message(f"Alternative navigation response status: {response2.status}")
+                    current_url = page.url
+                    log_message(f"Current page URL after retry: {current_url}")
+                except Exception as e:
+                    log_message(f"Alternative navigation error: {e}")
+                    try:
+                        await save_debug_info(page, 'navigation_retry_error')
+                    except:
+                        pass
+                    return False
+        except Exception as e:
+            log_message(f"Error reading page.url: {e}")
 
         # Try multiple selectors for the retweet/repost button to be robust against UI changes
         retweet_selectors = [
