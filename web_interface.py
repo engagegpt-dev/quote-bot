@@ -488,6 +488,9 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
             await quote_btn.click()
         await page.wait_for_timeout(4000)
         
+        # Screenshot dopo aver cliccato quote
+        await save_debug_info(page, 'after_quote_click')
+        
         # Controlla se siamo ancora sul tweet
         current_url = page.url
         if "status" not in current_url:
@@ -550,6 +553,9 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
                 await page.keyboard.type(' ', delay=20)
 
         await page.wait_for_timeout(1000)
+        
+        # Screenshot dopo aver inserito il testo
+        await save_debug_info(page, 'after_text_input')
 
         post_btn_selectors = [
             'button[data-testid="tweetButton"]',
