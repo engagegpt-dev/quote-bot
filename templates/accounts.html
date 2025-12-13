@@ -8,9 +8,14 @@
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <h5><i class="fas fa-users"></i> Accounts ({{ accounts|length }})</h5>
-                <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#addAccountModal">
-                    <i class="fas fa-plus"></i> Add Account
-                </button>
+                <div>
+                    <button class="btn btn-primary btn-sm me-2" data-bs-toggle="modal" data-bs-target="#addAccountModal">
+                        <i class="fas fa-plus"></i> Add Account
+                    </button>
+                    <button class="btn btn-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#importAccountsModal">
+                        <i class="fas fa-upload"></i> Import Batch
+                    </button>
+                </div>
             </div>
             <div class="card-body">
                 {% if accounts %}
@@ -92,8 +97,40 @@
         </div>
     </div>
 </div>
-
 <!-- Add Account Modal -->
+            <!-- Import Accounts Modal -->
+            <div class="modal fade" id="importAccountsModal" tabindex="-1">
+                <div class="modal-dialog modal-lg">
+                    <div class="modal-content">
+                        <form method="post" action="/accounts/import">
+                            <div class="modal-header">
+                                <h5 class="modal-title">Import Accounts (Batch)</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                            </div>
+                            <div class="modal-body">
+                                <p>Paste your accounts list below. Supported format per account (case-insensitive):</p>
+                                <pre>Username: value
+            Password: value
+            Email: value
+            Auth Token: value
+            TOTP Secret: value
+            Registration Year: value
+            ------------------------------</pre>
+                                <div class="mb-3">
+                                    <label class="form-label">Accounts Text</label>
+                                    <textarea name="accounts_text" class="form-control" rows="10" required></textarea>
+                                </div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                <button type="submit" class="btn btn-primary">Import Accounts</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Add Account Modal -->
 <div class="modal fade" id="addAccountModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">

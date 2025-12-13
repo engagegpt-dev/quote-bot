@@ -50,3 +50,19 @@ curl -X POST "http://localhost:8000/config/update" \
 - Logs: `GET /logs`
 - Status: `GET /status`
 - API Docs: `http://localhost:8000/docs`
+
+## ➕ Batch Import Accounts
+
+You can paste a block of accounts in the web UI under `Accounts -> Import Batch`. Use this format per account (separate with `------------------------------`):
+
+```
+Username: user1
+Password: p@ss
+Email: user1@example.com
+Auth Token: <token>
+TOTP Secret: <secret>
+Registration Year: 2015
+------------------------------
+``` 
+
+Duplicates (username/email/auth token) are skipped and logged.

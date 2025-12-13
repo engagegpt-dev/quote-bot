@@ -107,6 +107,13 @@ async def add_account_form(
     user: str = Depends(authenticate)
 ):
     accounts = load_accounts()
+    # Check for duplicates by username/email/auth token
+    dup_user = next((acc for acc in accounts if acc.get('username', '').lower() == username.lower()), None)
+    dup_email = next((acc for acc in accounts if acc.get('email', '').lower() == email.lower()), None)
+    dup_token = next((acc for acc in accounts if acc.get('auth_token', '') == auth_token), None)
+    if dup_user or dup_email or dup_token:
+        log_message(f"Duplicate account skipped: {username}")
+        return RedirectResponse(url='/accounts', status_code=303)
     max_id = max([acc.get("id", 0) for acc in accounts], default=0)
     
     new_account = {
@@ -125,6 +132,104 @@ async def add_account_form(
     log_message(f"Account {username} added")
     
     return RedirectResponse(url="/accounts", status_code=303)
+
+
+def parse_accounts_from_text(text: str) -> List[dict]:
+    """Parse pasted account blocks into a list of account dicts.
+
+    Supported formats: blocks separated by lines of dashes or blank lines.
+    Each block contains lines like `Username: foo` or `Auth Token: abc`.
+    Returns a list of parsed accounts (may exclude malformed entries).
+    """
+    import re
+
+    if not text:
+        return []
+
+    # Split on lines of 3+ dashes or blank lines followed by 'Account' headers
+    blocks = re.split(r"\n-{3,}\n|\n\s*Account\s*\d+\s*:\s*\n", text, flags=re.IGNORECASE)
+    parsed = []
+    for block in blocks:
+        if not block or not block.strip():
+            continue
+        data = {}
+        for line in block.splitlines():
+            if ':' not in line:
+                continue
+            key, val = line.split(':', 1)
+            key_n = key.strip().lower()
+            val = val.strip()
+            if key_n.startswith('username'):
+                data['username'] = val.lstrip('@')
+            elif key_n.startswith('password'):
+                data['password'] = val
+            elif key_n.startswith('email'):
+                data['email'] = val
+            elif key_n.startswith('auth') and 'token' in key_n:
+                data['auth_token'] = val
+            elif key_n.startswith('totp') or key_n.startswith('topt') or 'totp' in key_n:
+                data['totp_secret'] = val
+            elif key_n.startswith('registration') or key_n.startswith('reg') or 'year' in key_n:
+                try:
+                    data['registration_year'] = int(val)
+                except:
+                    data['registration_year'] = None
+        # Minimal sanity check: must have username and either password or auth_token
+        if 'username' in data and (('password' in data and data['password']) or ('auth_token' in data and data['auth_token'])):
+            # Initialize optional keys
+            data.setdefault('password', '')
+            data.setdefault('email', '')
+            data.setdefault('auth_token', '')
+            data.setdefault('totp_secret', '')
+            if 'registration_year' not in data or not data['registration_year']:
+                data['registration_year'] = datetime.now().year
+            parsed.append(data)
+    return parsed
+
+
+@app.post('/accounts/import')
+async def import_accounts_form(request: Request, accounts_text: str = Form(...), user: str = Depends(authenticate)):
+    accounts = load_accounts()
+    existing_usernames = set([acc.get('username').lower() for acc in accounts if acc.get('username')])
+    existing_emails = set([acc.get('email').lower() for acc in accounts if acc.get('email')])
+    existing_tokens = set([acc.get('auth_token') for acc in accounts if acc.get('auth_token')])
+
+    parsed = parse_accounts_from_text(accounts_text)
+    added = 0
+    skipped = 0
+    skipped_reasons = []
+    max_id = max([acc.get('id', 0) for acc in accounts], default=0)
+    for p in parsed:
+        username_l = p.get('username', '').lower()
+        email_l = p.get('email', '').lower()
+        token = p.get('auth_token', '')
+        if username_l in existing_usernames or (email_l and email_l in existing_emails) or (token and token in existing_tokens):
+            skipped += 1
+            skipped_reasons.append((p.get('username'), 'duplicate'))
+            continue
+        max_id += 1
+        new_acc = {
+            'id': max_id,
+            'username': p.get('username'),
+            'password': p.get('password', ''),
+            'email': p.get('email', ''),
+            'auth_token': p.get('auth_token', ''),
+            'totp_secret': p.get('totp_secret', ''),
+            'registration_year': p.get('registration_year', datetime.now().year),
+            'active': True
+        }
+        accounts.append(new_acc)
+        existing_usernames.add(username_l)
+        if new_acc['email']:
+            existing_emails.add(new_acc['email'].lower())
+        if new_acc['auth_token']:
+            existing_tokens.add(new_acc['auth_token'])
+        added += 1
+        log_message(f"Batch added account {new_acc['username']}")
+    if added > 0:
+        save_accounts(accounts)
+    log_message(f"Import completed: {added} added, {skipped} skipped")
+    return RedirectResponse(url='/accounts', status_code=303)
 
 @app.post("/accounts/{account_id}/delete")
 async def delete_account_form(account_id: int, user: str = Depends(authenticate)):
@@ -200,11 +305,21 @@ async def stop_campaign_form(user: str = Depends(authenticate)):
 # Bot Logic (same as before)
 async def login_with_auth_token(context, auth_token: str):
     try:
+        # Add cookies for both x.com and twitter.com domains to increase compatibility
         cookies = [
             {
                 "name": "auth_token",
                 "value": auth_token,
                 "domain": ".x.com",
+                "path": "/",
+                "httpOnly": True,
+                "secure": True,
+                "sameSite": "Lax",
+            },
+            {
+                "name": "auth_token",
+                "value": auth_token,
+                "domain": ".twitter.com",
                 "path": "/",
                 "httpOnly": True,
                 "secure": True,
@@ -244,21 +359,105 @@ async def login_with_credentials(page, username: str, password: str, totp_secret
         log_message(f"Credential login failed: {e}")
         return False
 
+async def save_debug_info(page, label: str):
+    try:
+        import os
+        from datetime import datetime
+        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+        debug_dir = os.path.join('debug', ts)
+        os.makedirs(debug_dir, exist_ok=True)
+        screenshot_path = os.path.join(debug_dir, f"{label}.png")
+        html_path = os.path.join(debug_dir, f"{label}.html")
+        # Try to capture screenshot
+        try:
+            await page.screenshot(path=screenshot_path, full_page=True)
+        except Exception as e:
+            log_message(f"save_debug_info screenshot failed: {e}")
+        try:
+            content = await page.content()
+            with open(html_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+        except Exception as e:
+            log_message(f"save_debug_info HTML failed: {e}")
+        log_message(f"Saved debug info: {screenshot_path}, {html_path}")
+    except Exception as e:
+        log_message(f"save_debug_info error: {e}")
+
+
 async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: str = ""):
     try:
         log_message(f"Processing tweet: {tweet_url}")
         await page.goto(tweet_url)
         await page.wait_for_timeout(3000)
 
-        retweet_btn = await page.wait_for_selector('[data-testid="retweet"]', timeout=10000)
+        # Try multiple selectors for the retweet/repost button to be robust against UI changes
+        retweet_selectors = [
+            '[data-testid="retweet"]',
+            '[aria-label="Repost"]',
+            'div[data-testid="retweet"]',
+            'button[data-testid="retweet"]'
+        ]
+        retweet_btn = None
+        for selector in retweet_selectors:
+            try:
+                retweet_btn = await page.wait_for_selector(selector, timeout=4000)
+                if retweet_btn:
+                    break
+            except:
+                continue
+
+        if not retweet_btn:
+            log_message("Repost/retweet button not found")
+            await save_debug_info(page, 'retweet_button_not_found')
+            return False
+
         await retweet_btn.click()
-        await page.wait_for_timeout(5000)
+        await page.wait_for_timeout(2000)
 
-        quote_btn = await page.wait_for_selector('[data-testid="Dropdown"] [role="menuitem"]:nth-child(2)', timeout=3000)
+        # Try multiple ways to find the Quote/Retweet with comment menu item (diff languages/markup)
+        quote_selectors = [
+            '[data-testid="Dropdown"] [role="menuitem"]:has-text("Quote")',
+            '[data-testid="Dropdown"] [role="menuitem"]:nth-child(2)',
+            'div[role="menuitem"]:has-text("Quote")',
+            'div[role="menuitem"]:nth-child(2)'
+        ]
+        quote_btn = None
+        for selector in quote_selectors:
+            try:
+                quote_btn = await page.wait_for_selector(selector, timeout=2500)
+                if quote_btn:
+                    break
+            except:
+                continue
+
+        if not quote_btn:
+            log_message("Quote menu item not found")
+            await save_debug_info(page, 'quote_menuitem_not_found')
+            return False
+
         await quote_btn.click()
-        await page.wait_for_timeout(5000)
+        await page.wait_for_timeout(2000)
 
-        textarea = await page.wait_for_selector('div[role="textbox"][data-testid^="tweetTextarea"]', timeout=3000)
+        textarea_selectors = [
+            'div[role="textbox"][data-testid^="tweetTextarea"]',
+            '[data-testid="tweetTextarea_0"] div[role="textbox"]',
+            '[data-testid="tweetTextarea_1"] div[role="textbox"]',
+            'div[aria-label="Tweet text"] div[role="textbox"]',
+            'div[role="textbox"].public-DraftStyleDefault-block'
+        ]
+        textarea = None
+        for sel in textarea_selectors:
+            try:
+                textarea = await page.wait_for_selector(sel, timeout=2000)
+                if textarea:
+                    break
+            except:
+                continue
+
+        if not textarea:
+            log_message("Quote text input area not found")
+            await save_debug_info(page, 'quote_textarea_not_found')
+            return False
         await textarea.click()
         
         quote_text = ""
@@ -295,16 +494,39 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
 
         await page.wait_for_timeout(1000)
 
-        post_btn = await page.wait_for_selector('button[data-testid="tweetButtonInline"]', timeout=3000)
-        if await post_btn.get_attribute('aria-disabled') != 'true':
-            await post_btn.click()
-            await page.wait_for_timeout(2000)
-            return True
-        
-        return False
+        post_btn_selectors = [
+            'button[data-testid="tweetButtonInline"]',
+            'button[data-testid="tweetButton"]'
+        ]
+        post_clicked = False
+        for selector in post_btn_selectors:
+            try:
+                buttons = await page.query_selector_all(selector)
+                for btn in buttons:
+                    if await btn.is_visible() and await btn.get_attribute('aria-disabled') != 'true':
+                        await btn.click()
+                        post_clicked = True
+                        break
+                if post_clicked:
+                    break
+            except:
+                continue
+
+        if not post_clicked:
+            log_message("Post button not found or disabled")
+            await save_debug_info(page, 'post_button_not_found')
+            return False
+
+        # Successfully clicked the post button
+        await page.wait_for_timeout(2000)
+        return True
 
     except Exception as e:
         log_message(f"Quote retweet failed: {e}")
+        try:
+            await save_debug_info(page, 'quote_retweet_exception')
+        except:
+            pass
         return False
 
 async def run_quote_campaign(tweet_url: str, users_to_tag: List[str], message: str, account_ids: List[int] = None):
@@ -346,6 +568,10 @@ async def run_quote_campaign(tweet_url: str, users_to_tag: List[str], message: s
                         log_message(f"Auth token login successful for {account['username']}")
                     except:
                         login_success = False
+                        try:
+                            await save_debug_info(page, f'login_verification_failed_{account["username"]}')
+                        except:
+                            pass
 
                 if not login_success:
                     login_success = await login_with_credentials(
@@ -357,6 +583,10 @@ async def run_quote_campaign(tweet_url: str, users_to_tag: List[str], message: s
 
                 if not login_success:
                     log_message(f"Login failed for {account['username']}")
+                    try:
+                        await save_debug_info(page, f'login_failed_{account["username"]}')
+                    except:
+                        pass
                     await browser.close()
                     continue
 

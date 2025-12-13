@@ -36,6 +36,27 @@ class QuoteRetweetBot:
         if len(self.logs) > 100:
             self.logs = self.logs[-100:]
 
+    async def _save_debug_info(self, page, label: str):
+        try:
+            ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+            debug_dir = os.path.join('debug', ts)
+            os.makedirs(debug_dir, exist_ok=True)
+            screenshot_path = os.path.join(debug_dir, f"{label}.png")
+            html_path = os.path.join(debug_dir, f"{label}.html")
+            try:
+                await page.screenshot(path=screenshot_path, full_page=True)
+            except Exception as e:
+                self.log(f"_save_debug_info screenshot failed: {e}")
+            try:
+                content = await page.content()
+                with open(html_path, 'w', encoding='utf-8') as f:
+                    f.write(content)
+            except Exception as e:
+                self.log(f"_save_debug_info HTML failed: {e}")
+            self.log(f"Saved debug info: {screenshot_path}, {html_path}")
+        except Exception as e:
+            self.log(f"_save_debug_info error: {e}")
+
     async def set_auth_token_cookie(self, context, auth_token: str) -> bool:
         try:
             cookies = [
@@ -88,6 +109,7 @@ class QuoteRetweetBot:
 
             if not retweet_button:
                 self.log("Repost button not found")
+                await self._save_debug_info(page, 'retweet_button_not_found')
                 return False
 
             await retweet_button.click()
@@ -110,6 +132,7 @@ class QuoteRetweetBot:
 
             if not quote_button:
                 self.log("Quote button not found")
+                await self._save_debug_info(page, 'quote_button_not_found')
                 return False
 
             await quote_button.click()
@@ -121,6 +144,7 @@ class QuoteRetweetBot:
                 await page.wait_for_selector(textarea_selector, timeout=3000)
             except:
                 self.log("Text area not found")
+                await self._save_debug_info(page, 'textarea_not_found')
                 return False
 
             # Clear and type text
@@ -176,6 +200,7 @@ class QuoteRetweetBot:
 
             if not post_clicked:
                 self.log("Post button not found or disabled")
+                await self._save_debug_info(page, 'post_button_not_found')
                 return False
 
             self.log("Quote retweet published successfully")
@@ -184,6 +209,10 @@ class QuoteRetweetBot:
 
         except Exception as e:
             self.log(f"Error in quote_retweet: {e}")
+            try:
+                await self._save_debug_info(page, 'quote_retweet_exception')
+            except:
+                pass
             return False
 
     async def boost_post(self, post_url: str) -> bool:

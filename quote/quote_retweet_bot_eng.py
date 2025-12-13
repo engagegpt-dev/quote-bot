@@ -127,6 +127,30 @@ async def set_auth_token_cookie(context, auth_token: str) -> bool:
         print(f"Error setting auth_token cookie: {e}")
         return False
 
+
+async def save_debug_info(page, label: str):
+    try:
+        from datetime import datetime
+        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+        debug_dir = os.path.join('debug', ts)
+        os.makedirs(debug_dir, exist_ok=True)
+        screenshot_path = os.path.join(debug_dir, f"{label}.png")
+        html_path = os.path.join(debug_dir, f"{label}.html")
+        try:
+            await page.screenshot(path=screenshot_path, full_page=True)
+            print(f"Screenshot saved: {screenshot_path}")
+        except Exception as e:
+            print(f"save_debug_info screenshot failed: {e}")
+        try:
+            content = await page.content()
+            with open(html_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            print(f"HTML saved: {html_path}")
+        except Exception as e:
+            print(f"save_debug_info HTML failed: {e}")
+    except Exception as e:
+        print(f"save_debug_info error: {e}")
+
 def load_auth_tokens_from_file() -> list[str]:
     tokens = []
     if not os.path.exists(AUTH_TOKENS_PATH):
@@ -181,6 +205,7 @@ async def quote_retweet(page, post_url, quote_text, image_path=None):
 
         if not retweet_button:
             print("Repost button not found")
+            await save_debug_info(page, 'retweet_button_not_found')
             return False
 
         await retweet_button.click()
@@ -206,6 +231,7 @@ async def quote_retweet(page, post_url, quote_text, image_path=None):
 
         if not quote_button:
             print("Citation button not found")
+            await save_debug_info(page, 'quote_button_not_found')
             return False
 
         await quote_button.click()
@@ -230,6 +256,7 @@ async def quote_retweet(page, post_url, quote_text, image_path=None):
 
         if not textbox_selector:
             print("Text input field not found")
+            await save_debug_info(page, 'textbox_not_found')
             return False
 
         await page.click(textbox_selector)
@@ -331,11 +358,7 @@ async def quote_retweet(page, post_url, quote_text, image_path=None):
 
         if not post_clicked:
             print("The publish button was not found or is disabled (perhaps not all tags have been selected).")
-            try:
-                await page.screenshot(path="debug_no_post_button.png", full_page=True)
-                print("Screenshot saved: debug_no_post_button.png")
-            except:
-                pass
+            await save_debug_info(page, 'post_button_not_found')
             return False
 
         print("The quoted repost has been published!")
@@ -345,8 +368,7 @@ async def quote_retweet(page, post_url, quote_text, image_path=None):
     except Exception as e:
         print(f"Error in the quoted repost: {e}")
         try:
-            await page.screenshot(path="debug_exception_quote_retweet.png", full_page=True)
-            print("Screenshot saved: debug_exception_quote_retweet.png")
+            await save_debug_info(page, 'exception_quote_retweet')
         except:
             pass
         return False
