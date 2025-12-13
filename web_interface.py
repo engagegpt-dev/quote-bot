@@ -410,32 +410,18 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
             return False
         await page.wait_for_timeout(3000)
 
-        # If navigation redirected to login or another location, capture debug info
+        # Check if we're on the correct tweet page
         try:
             current_url = page.url
             log_message(f"Current page URL after goto: {current_url}")
-            if not current_url or tweet_url not in current_url:
+            # More flexible URL check - just check if we have a status ID
+            if not current_url or "/status/" not in current_url:
                 log_message(f"Unexpected URL after navigation: {current_url}")
                 try:
                     await save_debug_info(page, 'unexpected_url_after_goto')
                 except:
                     pass
-                # Try alternative domain (twitter.com) and a retry
-                try:
-                    alt_tweet = tweet_url.replace('x.com', 'twitter.com') if 'x.com' in tweet_url else tweet_url
-                    log_message(f"Retrying navigation to alternative URL: {alt_tweet}")
-                    response2 = await page.goto(alt_tweet, wait_until='networkidle')
-                    if response2:
-                        log_message(f"Alternative navigation response status: {response2.status}")
-                    current_url = page.url
-                    log_message(f"Current page URL after retry: {current_url}")
-                except Exception as e:
-                    log_message(f"Alternative navigation error: {e}")
-                    try:
-                        await save_debug_info(page, 'navigation_retry_error')
-                    except:
-                        pass
-                    return False
+                return False
         except Exception as e:
             log_message(f"Error reading page.url: {e}")
 
@@ -465,6 +451,13 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
         await page.wait_for_timeout(500)
         await retweet_btn.click()
         await page.wait_for_timeout(3000)
+        
+        # Controlla se siamo ancora sul tweet
+        current_url = page.url
+        if "status" not in current_url:
+            log_message(f"Redirected after retweet click to: {current_url}")
+            await page.goto(tweet_url)
+            await page.wait_for_timeout(2000)
 
         # Try multiple ways to find the Quote/Retweet with comment menu item (diff languages/markup)
         quote_selectors = [
@@ -492,6 +485,13 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
         await page.wait_for_timeout(300)
         await quote_btn.click()
         await page.wait_for_timeout(4000)
+        
+        # Controlla se siamo ancora sul tweet
+        current_url = page.url
+        if "status" not in current_url:
+            log_message(f"Redirected after quote click to: {current_url}")
+            await page.goto(tweet_url)
+            await page.wait_for_timeout(2000)
 
         textarea_selectors = [
             'div[role="textbox"][data-testid^="tweetTextarea"]',
