@@ -491,22 +491,17 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
         # Screenshot dopo aver cliccato quote
         await save_debug_info(page, 'after_quote_click')
         
-        # Controlla se siamo ancora sul tweet
-        current_url = page.url
-        if "status" not in current_url:
-            log_message(f"Redirected after quote click to: {current_url}")
-            await page.goto(tweet_url)
-            await page.wait_for_timeout(2000)
-
-        # Selettori per "Add a comment" nel modal di quote
+        # Aspetta che il modal di quote si apra completamente
+        await page.wait_for_selector('[role="dialog"]', timeout=5000)
+        await page.wait_for_timeout(2000)
+        
+        # Selettori SOLO dentro il modal di quote
         textarea_selectors = [
-            '[placeholder="Add a comment"]',
-            '[aria-label="Add a comment"]',
-            'div[role="textbox"][placeholder="Add a comment"]',
-            'div[contenteditable="true"][placeholder="Add a comment"]',
-            '[data-testid="tweetTextarea_0"] div[role="textbox"]',
-            'div[role="textbox"].public-DraftStyleDefault-block',
-            '.public-DraftEditor-content'
+            '[role="dialog"] [placeholder="Add a comment"]',
+            '[role="dialog"] div[role="textbox"]',
+            '[role="dialog"] div[contenteditable="true"]',
+            '[role="dialog"] .public-DraftEditor-content',
+            '[role="dialog"] .public-DraftStyleDefault-block'
         ]
         textarea = None
         for sel in textarea_selectors:
