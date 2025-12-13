@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Quote Bot{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <h5><i class="fas fa-tachometer-alt"></i> Dashboard</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-3">
+                        <div class="card bg-primary text-white">
+                            <div class="card-body text-center">
+                                <h4>{{ total_accounts }}</h4>
+                                <small>Total Accounts</small>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="card bg-success text-white">
+                            <div class="card-body text-center">
+                                <h4>{{ active_accounts }}</h4>
+                                <small>Active Accounts</small>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="card {% if is_running %}bg-warning{% else %}bg-secondary{% endif %} text-white">
+                            <div class="card-body text-center">
+                                <h4>{% if is_running %}Running{% else %}Stopped{% endif %}</h4>
+                                <small>Bot Status</small>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="card bg-info text-white">
+                            <div class="card-body text-center">
+                                <h4><i class="fas fa-rocket"></i></h4>
+                                <small><a href="/campaign" class="text-white">Start Campaign</a></small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {% if last_campaign %}
+                <div class="mt-3">
+                    <small class="text-muted">Last Campaign: {{ last_campaign }}</small>
+                </div>
+                {% endif %}
+
+                {% if is_running %}
+                <div class="mt-3">
+                    <form method="post" action="/campaign/stop" style="display: inline;">
+                        <button type="submit" class="btn btn-danger">
+                            <i class="fas fa-stop"></i> Stop Campaign
+                        </button>
+                    </form>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">
+                <h6><i class="fas fa-list"></i> Recent Logs</h6>
+            </div>
+            <div class="card-body" style="max-height: 300px; overflow-y: auto;">
+                {% for log in logs %}
+                <div class="small mb-1">{{ log }}</div>
+                {% endfor %}
+                {% if not logs %}
+                <div class="text-muted">No logs yet</div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h6><i class="fas fa-info-circle"></i> Quick Actions</h6>
+            </div>
+            <div class="card-body">
+                <a href="/accounts" class="btn btn-outline-primary me-2">
+                    <i class="fas fa-users"></i> Manage Accounts
+                </a>
+                <a href="/campaign" class="btn btn-outline-success me-2">
+                    <i class="fas fa-rocket"></i> Start Campaign
+                </a>
+                <a href="/api/logs" class="btn btn-outline-info" target="_blank">
+                    <i class="fas fa-file-alt"></i> View Full Logs
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+
+{% block title %}Campaign - Quote Bot{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <h5><i class="fas fa-rocket"></i> Start Quote Campaign</h5>
+            </div>
+            <div class="card-body">
+                {% if error %}
+                <div class="alert alert-danger">{{ error }}</div>
+                {% endif %}
+
+                {% if is_running %}
+                <div class="alert alert-warning">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    Campaign is currently running. Stop it first to start a new one.
+                </div>
+                {% endif %}
+
+                <form method="post" action="/campaign/start" {% if is_running %}style="opacity: 0.5; pointer-events: none;"{% endif %}>
+                    <div class="mb-3">
+                        <label class="form-label">Tweet URL</label>
+                        <input type="url" class="form-control" name="tweet_url" 
+                               placeholder="https://x.com/username/status/123456789" required>
+                        <div class="form-text">Full URL of the tweet to quote retweet</div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Users to Tag</label>
+                        <input type="text" class="form-control" name="users_to_tag" 
+                               placeholder="user1, user2, user3" required>
+                        <div class="form-text">Comma-separated list of usernames to tag (without @)</div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Message (Optional)</label>
+                        <textarea class="form-control" name="message" rows="3" 
+                                  placeholder="Additional message to include with the quote"></textarea>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Select Accounts</label>
+                        {% if accounts %}
+                        <div class="row">
+                            {% for account in accounts %}
+                            <div class="col-md-6">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" name="account_ids" 
+                                           value="{{ account.id }}" id="account{{ account.id }}" checked>
+                                    <label class="form-check-label" for="account{{ account.id }}">
+                                        @{{ account.username }}
+                                        <small class="text-muted">({{ account.registration_year }})</small>
+                                    </label>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                        <div class="form-text">Select which accounts to use for the campaign</div>
+                        {% else %}
+                        <div class="alert alert-warning">
+                            <i class="fas fa-exclamation-triangle"></i>
+                            No active accounts available. <a href="/accounts">Add accounts first</a>.
+                        </div>
+                        {% endif %}
+                    </div>
+
+                    {% if accounts and not is_running %}
+                    <button type="submit" class="btn btn-success">
+                        <i class="fas fa-rocket"></i> Start Campaign
+                    </button>
+                    {% endif %}
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">
+                <h6><i class="fas fa-info-circle"></i> Campaign Info</h6>
+            </div>
+            <div class="card-body">
+                <p><strong>How it works:</strong></p>
+                <ol class="small">
+                    <li>Bot logs into selected accounts</li>
+                    <li>Navigates to the tweet URL</li>
+                    <li>Creates quote retweet</li>
+                    <li>Tags specified users</li>
+                    <li>Adds optional message</li>
+                    <li>Posts the quote</li>
+                </ol>
+
+                <div class="alert alert-info small">
+                    <i class="fas fa-clock"></i>
+                    5 second delay between accounts
+                </div>
+
+                <div class="alert alert-warning small">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    Monitor logs for any issues
+                </div>
+            </div>
+        </div>
+
+        {% if accounts %}
+        <div class="card mt-3">
+            <div class="card-header">
+                <h6><i class="fas fa-users"></i> Available Accounts</h6>
+            </div>
+            <div class="card-body">
+                {% for account in accounts %}
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <span>@{{ account.username }}</span>
+                    <span class="badge bg-success">Active</span>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Auto-select all accounts by default
+document.addEventListener('DOMContentLoaded', function() {
+    const checkboxes = document.querySelectorAll('input[name="account_ids"]');
+    checkboxes.forEach(cb => cb.checked = true);
+});
+</script>
+{% endblock %}
