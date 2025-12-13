@@ -602,9 +602,22 @@ async def run_quote_campaign(tweet_url: str, users_to_tag: List[str], message: s
             try:
                 log_message(f"Processing account: {account['username']}")
                 
-                browser = await p.chromium.launch(headless=True)
-                context = await browser.new_context()
+                browser = await p.chromium.launch(
+                    headless=True,
+                    args=[
+                        '--no-first-run',
+                        '--disable-blink-features=AutomationControlled',
+                        '--disable-web-security'
+                    ]
+                )
+                context = await browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    viewport={'width': 1920, 'height': 1080}
+                )
                 page = await context.new_page()
+                
+                # Rimuovi tracce di automazione
+                await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
                 login_success = await login_with_auth_token(context, account["auth_token"])
                 
@@ -639,7 +652,12 @@ async def run_quote_campaign(tweet_url: str, users_to_tag: List[str], message: s
                     await browser.close()
                     continue
 
-                success = await quote_retweet(page, tweet_url, users_to_tag, message)
+                # Usa twitter.com e naviga prima alla home
+                tweet_url_fixed = tweet_url.replace("x.com", "twitter.com")
+                await page.goto("https://twitter.com/home")
+                await page.wait_for_timeout(2000)
+                
+                success = await quote_retweet(page, tweet_url_fixed, users_to_tag, message)
                 if success:
                     success_count += 1
                     log_message(f"Quote posted successfully by {account['username']}")
