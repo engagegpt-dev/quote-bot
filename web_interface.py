@@ -460,8 +460,11 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
             await save_debug_info(page, 'retweet_button_not_found')
             return False
 
+        # Movimento mouse più umano prima del click
+        await page.hover('[data-testid="retweet"]')
+        await page.wait_for_timeout(500)
         await retweet_btn.click()
-        await page.wait_for_timeout(2000)
+        await page.wait_for_timeout(3000)
 
         # Try multiple ways to find the Quote/Retweet with comment menu item (diff languages/markup)
         quote_selectors = [
@@ -484,8 +487,11 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
             await save_debug_info(page, 'quote_menuitem_not_found')
             return False
 
+        # Movimento mouse più umano
+        await page.hover('div[role="menuitem"]:has-text("Quote")')
+        await page.wait_for_timeout(300)
         await quote_btn.click()
-        await page.wait_for_timeout(2000)
+        await page.wait_for_timeout(4000)
 
         textarea_selectors = [
             'div[role="textbox"][data-testid^="tweetTextarea"]',
