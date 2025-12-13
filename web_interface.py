@@ -498,12 +498,15 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
             await page.goto(tweet_url)
             await page.wait_for_timeout(2000)
 
+        # Selettori per "Add a comment" nel modal di quote
         textarea_selectors = [
-            'div[role="textbox"][data-testid^="tweetTextarea"]',
+            '[placeholder="Add a comment"]',
+            '[aria-label="Add a comment"]',
+            'div[role="textbox"][placeholder="Add a comment"]',
+            'div[contenteditable="true"][placeholder="Add a comment"]',
             '[data-testid="tweetTextarea_0"] div[role="textbox"]',
-            '[data-testid="tweetTextarea_1"] div[role="textbox"]',
-            'div[aria-label="Tweet text"] div[role="textbox"]',
-            'div[role="textbox"].public-DraftStyleDefault-block'
+            'div[role="textbox"].public-DraftStyleDefault-block',
+            '.public-DraftEditor-content'
         ]
         textarea = None
         for sel in textarea_selectors:
