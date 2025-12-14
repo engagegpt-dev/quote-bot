@@ -523,15 +523,20 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
         await textarea.click()
         await page.wait_for_timeout(500)
         
-        # Costruisci il testo con i tag
-        quote_text = ""
-        for user in users_to_tag:
-            if not user.startswith('@'):
-                user = f"@{user}"
-            quote_text += f"{user} "
-        
-        if message:
-            quote_text += message
+        # Build final text with tags in message template
+        if "{TAGS}" in message:
+            # Replace {TAGS} placeholder with actual tags
+            tags_text = " ".join([f"@{user}" if not user.startswith('@') else user for user in users_to_tag])
+            quote_text = message.replace("{TAGS}", tags_text)
+        else:
+            # Fallback to old method
+            quote_text = ""
+            for user in users_to_tag:
+                if not user.startswith('@'):
+                    user = f"@{user}"
+                quote_text += f"{user} "
+            if message:
+                quote_text += message
 
         # Scrivi il testo (EXACT working method)
         await page.keyboard.type(quote_text)

@@ -31,15 +31,29 @@
 
                     <div class="mb-3">
                         <label class="form-label">Users to Tag</label>
-                        <input type="text" class="form-control" name="users_to_tag" 
+                        <input type="text" class="form-control" name="users_to_tag" id="users_input"
                                placeholder="user1, user2, user3" required>
                         <div class="form-text">Comma-separated list of usernames to tag (without @)</div>
+                        
+                        <div class="mt-2">
+                            <small class="text-muted">Available tags:</small>
+                            <div id="available_tags" class="mt-1"></div>
+                        </div>
                     </div>
 
                     <div class="mb-3">
-                        <label class="form-label">Message (Optional)</label>
-                        <textarea class="form-control" name="message" rows="3" 
-                                  placeholder="Additional message to include with the quote"></textarea>
+                        <label class="form-label">Message Template</label>
+                        <textarea class="form-control" name="message" id="message_template" rows="4" 
+                                  placeholder="🔥 Don't miss your chance to join the WET airdrop! #WET #SOL&#10;https://x.com/i/communities/1998500948134559892 $WET&#10;&#10;🪂 eligible users: {TAGS}"></textarea>
+                        <div class="form-text">
+                            Use <code>{TAGS}</code> placeholder where you want the tagged users to appear.
+                            <br><small class="text-muted">Drag tags from above into the message or type {TAGS} manually.</small>
+                        </div>
+                        
+                        <div class="mt-2">
+                            <small class="text-muted">Preview:</small>
+                            <div id="message_preview" class="border rounded p-2 bg-light small" style="min-height: 60px;"></div>
+                        </div>
                     </div>
 
                     <div class="mb-3">
@@ -127,10 +141,105 @@
 
 {% block scripts %}
 <script>
-// Auto-select all accounts by default
 document.addEventListener('DOMContentLoaded', function() {
+    // Auto-select all accounts by default
     const checkboxes = document.querySelectorAll('input[name="account_ids"]');
     checkboxes.forEach(cb => cb.checked = true);
+    
+    const usersInput = document.getElementById('users_input');
+    const messageTemplate = document.getElementById('message_template');
+    const availableTags = document.getElementById('available_tags');
+    const messagePreview = document.getElementById('message_preview');
+    
+    // Update available tags when users input changes
+    function updateAvailableTags() {
+        const users = usersInput.value.split(',').map(u => u.trim()).filter(u => u);
+        availableTags.innerHTML = '';
+        
+        users.forEach(user => {
+            const tag = document.createElement('span');
+            tag.className = 'badge bg-primary me-1 mb-1';
+            tag.style.cursor = 'pointer';
+            tag.textContent = '@' + user;
+            tag.draggable = true;
+            
+            // Drag functionality
+            tag.addEventListener('dragstart', function(e) {
+                e.dataTransfer.setData('text/plain', '@' + user);
+            });
+            
+            // Click to insert at cursor
+            tag.addEventListener('click', function() {
+                insertAtCursor(messageTemplate, '@' + user + ' ');
+                updatePreview();
+            });
+            
+            availableTags.appendChild(tag);
+        });
+        
+        updatePreview();
+    }
+    
+    // Insert text at cursor position
+    function insertAtCursor(textarea, text) {
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        const value = textarea.value;
+        textarea.value = value.substring(0, start) + text + value.substring(end);
+        textarea.selectionStart = textarea.selectionEnd = start + text.length;
+        textarea.focus();
+    }
+    
+    // Update message preview
+    function updatePreview() {
+        const users = usersInput.value.split(',').map(u => u.trim()).filter(u => u);
+        const tagsText = users.map(u => '@' + u).join(' ');
+        let preview = messageTemplate.value.replace('{TAGS}', tagsText);
+        
+        if (!preview.trim()) {
+            preview = '<em class="text-muted">Preview will appear here...</em>';
+        } else {
+            preview = preview.replace(/\n/g, '<br>');
+        }
+        
+        messagePreview.innerHTML = preview;
+    }
+    
+    // Enable drop on textarea
+    messageTemplate.addEventListener('dragover', function(e) {
+        e.preventDefault();
+        this.style.backgroundColor = '#f8f9fa';
+    });
+    
+    messageTemplate.addEventListener('dragleave', function(e) {
+        this.style.backgroundColor = '';
+    });
+    
+    messageTemplate.addEventListener('drop', function(e) {
+        e.preventDefault();
+        this.style.backgroundColor = '';
+        const text = e.dataTransfer.getData('text/plain');
+        insertAtCursor(this, text + ' ');
+        updatePreview();
+    });
+    
+    // Add {TAGS} button
+    const tagsButton = document.createElement('button');
+    tagsButton.type = 'button';
+    tagsButton.className = 'btn btn-sm btn-outline-secondary mt-1';
+    tagsButton.innerHTML = 'Insert {TAGS} placeholder';
+    tagsButton.addEventListener('click', function() {
+        insertAtCursor(messageTemplate, '{TAGS}');
+        updatePreview();
+    });
+    messageTemplate.parentNode.insertBefore(tagsButton, messageTemplate.nextSibling);
+    
+    // Event listeners
+    usersInput.addEventListener('input', updateAvailableTags);
+    messageTemplate.addEventListener('input', updatePreview);
+    
+    // Initial update
+    updateAvailableTags();
 });
 </script>
 {% endblock %}
