@@ -491,6 +491,54 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
         # Screenshot dopo aver cliccato quote
         await save_debug_info(page, 'after_quote_click')
         
+        # Aspetta che il modal si carichi
+        await page.wait_for_timeout(2000)
+        
+        # Selettori per "Add a comment" basati sull'HTML fornito
+        textarea_selectors = [
+            '[data-testid="tweetTextarea_0"][role="textbox"]',
+            '.public-DraftEditor-content[data-testid="tweetTextarea_0"]',
+            '[aria-describedby*="placeholder"][contenteditable="true"]',
+            'div[aria-label="Post text"][contenteditable="true"]'
+        ]
+        
+        textarea = None
+        for sel in textarea_selectors:
+            try:
+                textarea = await page.wait_for_selector(sel, timeout=2000)
+                if textarea:
+                    break
+            except:
+                continue
+
+        if not textarea:
+            log_message("Add a comment textarea not found")
+            await save_debug_info(page, 'textarea_not_found')
+            return False
+            
+        await textarea.click()
+        await page.wait_for_timeout(500)
+        
+        # Costruisci il testo con i tag
+        quote_text = ""
+        for user in users_to_tag:
+            if not user.startswith('@'):
+                user = f"@{user}"
+            quote_text += f"{user} "
+        
+        if message:
+            quote_text += message
+
+        # Scrivi il testo
+        await page.keyboard.type(quote_text)
+        await page.wait_for_timeout(1000)
+        
+        # Screenshot dopo aver inserito il testo
+        await save_debug_info(page, 'after_text_input')
+        
+        # Screenshot finale
+        await save_debug_info(page, 'final_result')
+        
         return True
 
     except Exception as e:
