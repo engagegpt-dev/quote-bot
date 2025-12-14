@@ -519,11 +519,9 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
             await save_debug_info(page, 'textarea_not_found')
             return False
             
-        # Human-like textarea interaction
-        await page.hover(found_selector)
-        await page.wait_for_timeout(random.randint(200, 500))
+        # EXACT working logic from commit da68d88
         await textarea.click()
-        await page.wait_for_timeout(random.randint(500, 1000))
+        await page.wait_for_timeout(500)
         
         # Costruisci il testo con i tag
         quote_text = ""
@@ -535,28 +533,9 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
         if message:
             quote_text += message
 
-        # Type text with human-like behavior but keep it simple
-        words = quote_text.split(' ')
-        for idx, word in enumerate(words):
-            if word.startswith('@'):
-                # Type @mention with slight delay
-                await page.keyboard.type(word, delay=random.randint(50, 100))
-                await page.wait_for_timeout(random.randint(300, 700))
-                # Try to select suggestion if available
-                try:
-                    suggestion = await page.wait_for_selector('[role="option"]', timeout=1500)
-                    if suggestion:
-                        await suggestion.click()
-                        await page.wait_for_timeout(random.randint(100, 300))
-                except:
-                    pass
-            else:
-                await page.keyboard.type(word, delay=random.randint(20, 60))
-            
-            if idx < len(words) - 1:
-                await page.keyboard.type(' ', delay=random.randint(10, 30))
-        
-        await page.wait_for_timeout(random.randint(800, 1500))
+        # Scrivi il testo (EXACT working method)
+        await page.keyboard.type(quote_text)
+        await page.wait_for_timeout(1000)
         
         # Screenshot dopo aver inserito il testo
         await save_debug_info(page, 'after_text_input')
