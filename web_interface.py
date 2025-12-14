@@ -395,7 +395,7 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
         log_message(f"Processing tweet: {tweet_url}")
         # Navigate and capture response status and final URL
         try:
-ma             response = await page.goto(tweet_url, wait_until='networkidle', timeout=60000)
+            response = await page.goto(tweet_url, wait_until='networkidle', timeout=60000)
             if response:
                 status = response.status
                 log_message(f"Navigation response status: {status}")
