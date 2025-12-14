@@ -425,55 +425,31 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
         except Exception as e:
             log_message(f"Error reading page.url: {e}")
 
-        # Usa JavaScript per cliccare SOLO sul retweet del post principale
-        retweet_btn = None
-        try:
-            # JavaScript per cliccare direttamente sul retweet del primo articolo
-            js_result = await page.evaluate('''
-            () => {
-                // Scroll in cima
-                window.scrollTo(0, 0);
-                
-                // Aspetta un momento
-                setTimeout(() => {
-                    // Trova tutti i retweet button
-                    const retweetBtns = document.querySelectorAll('[data-testid="retweet"]');
-                    console.log('Found retweet buttons:', retweetBtns.length);
-                    
-                    if (retweetBtns.length > 0) {
-                        // Clicca il primo (dovrebbe essere il post principale)
-                        retweetBtns[0].click();
-                        console.log('Clicked first retweet button');
-                        return true;
-                    }
-                    return false;
-                }, 500);
-                
-                return true; // Indica che il codice è stato eseguito
-            }
-            ''')
-            if js_result:
-                log_message("Clicked main tweet retweet button via JavaScript")
-                await page.wait_for_timeout(4000)
-                # Salta il resto della logica di click
-            else:
-                log_message("JavaScript click failed, using fallback")
-                retweet_btn = await page.wait_for_selector('[data-testid="retweet"]', timeout=4000)
-        except Exception as e:
-            log_message(f"JavaScript click failed: {e}")
-            retweet_btn = await page.wait_for_selector('[data-testid="retweet"]', timeout=4000)
+        # Try multiple selectors for the retweet button
+        retweet_selectors = [
+            '[data-testid="retweet"]',
+            '[aria-label="Repost"]',
+            '[aria-label="Repost this post"]',
+            'div[data-testid="retweet"]',
+            'button[data-testid="retweet"]'
+        ]
 
-        if not retweet_btn:
-            log_message("Repost/retweet button not found")
+        retweet_button = None
+        for selector in retweet_selectors:
+            try:
+                retweet_button = await page.wait_for_selector(selector, timeout=4000)
+                if retweet_button:
+                    break
+            except:
+                continue
+
+        if not retweet_button:
+            log_message("Repost button not found")
             await save_debug_info(page, 'retweet_button_not_found')
             return False
 
-        # Solo se non abbiamo già cliccato con JavaScript
-        if retweet_btn:
-            await page.hover('[data-testid="retweet"]')
-            await page.wait_for_timeout(1500)
-            await retweet_btn.click()
-            await page.wait_for_timeout(4000)
+        await retweet_button.click()
+        await page.wait_for_timeout(2500)
         
         # Controlla se siamo ancora sul tweet
         current_url = page.url
