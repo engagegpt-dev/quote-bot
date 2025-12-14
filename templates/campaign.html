@@ -33,7 +33,17 @@
                         <label class="form-label">Users to Tag</label>
                         <input type="text" class="form-control" name="users_to_tag" id="users_input"
                                placeholder="user1, user2, user3" required>
-                        <div class="form-text">Comma-separated list of usernames to tag (without @)</div>
+                        <div class="form-text">
+                            Comma-separated list of usernames to tag (without @)<br>
+                            <small class="text-success">✨ <strong>Unlimited users supported!</strong> Large lists will be automatically split into multiple posts (max 10 tags each)</small>
+                        </div>
+                        
+                        <div class="mt-2" id="batch_info" style="display: none;">
+                            <div class="alert alert-info small">
+                                <i class="fas fa-info-circle"></i>
+                                <span id="batch_details"></span>
+                            </div>
+                        </div>
                         
                         <div class="mt-2">
                             <small class="text-muted">Available tags:</small>
@@ -139,8 +149,19 @@
                 </ol>
 
                 <div class="alert alert-info small">
-                    <i class="fas fa-clock"></i>
-                    5 second delay between accounts
+                    <i class="fas fa-users"></i>
+                    <strong>Batch Processing:</strong><br>
+                    • Max 10 tags per post<br>
+                    • Multiple posts for large lists<br>
+                    • 1-2 min delay between posts
+                </div>
+                
+                <div class="alert alert-success small">
+                    <i class="fas fa-magic"></i>
+                    <strong>Smart Features:</strong><br>
+                    • Auto-splits large tag lists<br>
+                    • Cycles through accounts<br>
+                    • Handles unlimited users
                 </div>
 
                 <div class="alert alert-warning small">
@@ -185,6 +206,26 @@ document.addEventListener('DOMContentLoaded', function() {
     function updateAvailableTags() {
         const users = usersInput.value.split(',').map(u => u.trim()).filter(u => u);
         availableTags.innerHTML = '';
+        
+        // Update batch info
+        const batchInfo = document.getElementById('batch_info');
+        const batchDetails = document.getElementById('batch_details');
+        
+        if (users.length > 10) {
+            const totalPosts = Math.ceil(users.length / 10);
+            batchInfo.style.display = 'block';
+            batchDetails.innerHTML = `
+                <strong>Batch Campaign:</strong> ${users.length} users will be split into ${totalPosts} posts<br>
+                • Posts 1-${totalPosts-1}: 10 tags each<br>
+                • Post ${totalPosts}: ${users.length % 10 || 10} tags<br>
+                • Estimated time: ${Math.ceil(totalPosts * 1.5)} minutes
+            `;
+        } else if (users.length > 0) {
+            batchInfo.style.display = 'block';
+            batchDetails.innerHTML = `<strong>Single Post:</strong> ${users.length} users in one post`;
+        } else {
+            batchInfo.style.display = 'none';
+        }
         
         users.forEach(user => {
             const tag = document.createElement('span');

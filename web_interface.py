@@ -284,11 +284,15 @@ async def start_campaign_form(
             "accounts": load_accounts()
         })
     
-    # Parse users to tag (but message already contains the positioned tags)
+    # Parse users to tag - support large lists
     users_list = [user.strip() for user in users_to_tag.split(",") if user.strip()]
     
+    # Log campaign details
+    log_message(f"Starting batch campaign: {len(users_list)} users to tag")
+    log_message(f"Will create {(len(users_list) + 9) // 10} posts with max 10 tags each")
+    
     background_tasks.add_task(
-        run_quote_campaign,
+        run_batch_quote_campaign,
         tweet_url,
         users_list,
         message,
@@ -598,6 +602,147 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
             pass
         return False
 
+def chunk_users(users_list: List[str], chunk_size: int = 10) -> List[List[str]]:
+    """Split users list into chunks of max chunk_size"""
+    chunks = []
+    for i in range(0, len(users_list), chunk_size):
+        chunks.append(users_list[i:i + chunk_size])
+    return chunks
+
+async def run_batch_quote_campaign(tweet_url: str, users_to_tag: List[str], message: str, account_ids: List[int] = None):
+    """Run campaign with automatic chunking for large user lists"""
+    bot_state["is_running"] = True
+    bot_state["last_campaign"] = datetime.now().isoformat()
+    
+    # Split users into chunks of 10
+    user_chunks = chunk_users(users_to_tag, 10)
+    total_posts = len(user_chunks)
+    
+    log_message(f"Batch campaign: {len(users_to_tag)} users split into {total_posts} posts")
+    
+    accounts = load_accounts()
+    if account_ids:
+        accounts = [acc for acc in accounts if acc.get("id") in account_ids]
+    
+    active_accounts = [acc for acc in accounts if acc.get("active", True)]
+    
+    if not active_accounts:
+        log_message("No active accounts available")
+        bot_state["is_running"] = False
+        return
+    
+    success_count = 0
+    account_index = 0
+    
+    async with async_playwright() as p:
+        for chunk_num, user_chunk in enumerate(user_chunks, 1):
+            if not bot_state["is_running"]:
+                break
+            
+            # Cycle through accounts
+            account = active_accounts[account_index % len(active_accounts)]
+            account_index += 1
+            
+            log_message(f"Post {chunk_num}/{total_posts}: Tagging {len(user_chunk)} users with account {account['username']}")
+            
+            try:
+                # Browser setup
+                try:
+                    browser = await p.chromium.launch(
+                        headless=False,
+                        args=[
+                            '--no-first-run',
+                            '--disable-blink-features=AutomationControlled',
+                            '--disable-web-security',
+                            '--disable-dev-shm-usage',
+                            '--no-sandbox'
+                        ]
+                    )
+                except Exception as e:
+                    log_message(f"Headed browser failed, using headless: {e}")
+                    browser = await p.chromium.launch(
+                        headless=True,
+                        args=[
+                            '--no-first-run',
+                            '--disable-blink-features=AutomationControlled',
+                            '--disable-web-security',
+                            '--disable-dev-shm-usage',
+                            '--no-sandbox',
+                            '--disable-gpu',
+                            '--virtual-time-budget=5000'
+                        ]
+                    )
+                
+                context = await browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    viewport={'width': 1920, 'height': 1080},
+                    locale='en-US',
+                    timezone_id='America/New_York'
+                )
+                page = await context.new_page()
+                
+                # Remove automation traces
+                await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+                await context.add_init_script("Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]})")
+                await context.add_init_script("Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']})")
+
+                # Login
+                login_success = await login_with_auth_token(context, account["auth_token"])
+                
+                if login_success:
+                    await page.goto("https://x.com/home")
+                    await page.wait_for_timeout(3000)
+                    
+                    try:
+                        await page.wait_for_selector('[data-testid="SideNav_NewTweet_Button"]', timeout=5000)
+                        log_message(f"Auth token login successful for {account['username']}")
+                    except:
+                        login_success = False
+
+                if not login_success:
+                    login_success = await login_with_credentials(
+                        page, 
+                        account["username"], 
+                        account["password"], 
+                        account["totp_secret"]
+                    )
+
+                if not login_success:
+                    log_message(f"Login failed for {account['username']}, skipping chunk {chunk_num}")
+                    await browser.close()
+                    continue
+
+                # Use twitter.com
+                tweet_url_fixed = tweet_url.replace("x.com", "twitter.com")
+                await page.goto("https://twitter.com/home")
+                await page.wait_for_timeout(2000)
+                
+                # Post with current chunk
+                success = await quote_retweet(page, tweet_url_fixed, user_chunk, message)
+                if success:
+                    success_count += 1
+                    log_message(f"Post {chunk_num}/{total_posts} successful by {account['username']}")
+                else:
+                    log_message(f"Post {chunk_num}/{total_posts} failed for {account['username']}")
+
+                await browser.close()
+                
+                # Delay between posts (longer for same account)
+                if chunk_num < total_posts:  # Don't wait after last post
+                    delay = random.randint(60, 120)  # 1-2 minutes between posts
+                    log_message(f"Waiting {delay}s before next post...")
+                    await asyncio.sleep(delay)
+
+            except Exception as e:
+                log_message(f"Error in chunk {chunk_num} with account {account['username']}: {e}")
+                try:
+                    await browser.close()
+                except:
+                    pass
+
+    bot_state["is_running"] = False
+    log_message(f"Batch campaign completed. Success: {success_count}/{total_posts} posts")
+
 async def run_quote_campaign(tweet_url: str, users_to_tag: List[str], message: str, account_ids: List[int] = None):
     bot_state["is_running"] = True
     bot_state["last_campaign"] = datetime.now().isoformat()
@@ -722,15 +867,22 @@ async def start_quote_campaign_api(request: QuoteRequest, background_tasks: Back
     if bot_state["is_running"]:
         raise HTTPException(status_code=400, detail="Campaign already running")
     
+    # Use batch campaign for API too
     background_tasks.add_task(
-        run_quote_campaign,
+        run_batch_quote_campaign,
         request.tweet_url,
         request.users_to_tag,
         request.message or "",
         request.account_ids
     )
     
-    return {"message": "Campaign started", "status": "success"}
+    total_posts = (len(request.users_to_tag) + 9) // 10
+    return {
+        "message": "Batch campaign started", 
+        "status": "success",
+        "total_users": len(request.users_to_tag),
+        "total_posts": total_posts
+    }
 
 @app.get("/api/status")
 async def get_status_api():
