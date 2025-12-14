@@ -519,22 +519,28 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
             await save_debug_info(page, 'textarea_not_found')
             return False
             
-        # Human-like textarea interaction
-        await page.hover(found_selector)
-        await page.wait_for_timeout(random.randint(300, 800))
+        # Simple working textarea interaction (RESTORED)
         await textarea.click()
-        await page.wait_for_timeout(random.randint(800, 1500))
+        await page.wait_for_timeout(500)
         
-        # Build final text - only use message as-is (tags already placed by user)
-        if message.strip():
-            quote_text = message
+        # Build final text with tags in message template (RESTORED WORKING LOGIC)
+        if "{TAGS}" in message:
+            # Replace {TAGS} placeholder with actual tags
+            tags_text = " ".join([f"@{user}" if not user.startswith('@') else user for user in users_to_tag])
+            quote_text = message.replace("{TAGS}", tags_text)
         else:
-            # Fallback: add tags at beginning if no message
-            quote_text = " ".join([f"@{user}" if not user.startswith('@') else user for user in users_to_tag])
+            # Fallback to old method if no {TAGS} placeholder
+            quote_text = ""
+            for user in users_to_tag:
+                if not user.startswith('@'):
+                    user = f"@{user}"
+                quote_text += f"{user} "
+            if message:
+                quote_text += message
 
-        # Type text with human-like delays
-        await page.keyboard.type(quote_text, delay=random.randint(40, 120))
-        await page.wait_for_timeout(random.randint(1500, 3000))
+        # Simple working text typing (RESTORED)
+        await page.keyboard.type(quote_text)
+        await page.wait_for_timeout(1000)
         
         # Screenshot dopo aver inserito il testo
         await save_debug_info(page, 'after_text_input')
