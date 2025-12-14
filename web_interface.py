@@ -284,7 +284,7 @@ async def start_campaign_form(
             "accounts": load_accounts()
         })
     
-    # Parse users to tag
+    # Parse users to tag (but message already contains the positioned tags)
     users_list = [user.strip() for user in users_to_tag.split(",") if user.strip()]
     
     background_tasks.add_task(
@@ -519,28 +519,22 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
             await save_debug_info(page, 'textarea_not_found')
             return False
             
-        # EXACT working logic from commit da68d88
+        # Human-like textarea interaction
+        await page.hover(found_selector)
+        await page.wait_for_timeout(random.randint(300, 800))
         await textarea.click()
-        await page.wait_for_timeout(500)
+        await page.wait_for_timeout(random.randint(800, 1500))
         
-        # Build final text with tags in message template
-        if "{TAGS}" in message:
-            # Replace {TAGS} placeholder with actual tags
-            tags_text = " ".join([f"@{user}" if not user.startswith('@') else user for user in users_to_tag])
-            quote_text = message.replace("{TAGS}", tags_text)
+        # Build final text - only use message as-is (tags already placed by user)
+        if message.strip():
+            quote_text = message
         else:
-            # Fallback to old method
-            quote_text = ""
-            for user in users_to_tag:
-                if not user.startswith('@'):
-                    user = f"@{user}"
-                quote_text += f"{user} "
-            if message:
-                quote_text += message
+            # Fallback: add tags at beginning if no message
+            quote_text = " ".join([f"@{user}" if not user.startswith('@') else user for user in users_to_tag])
 
-        # Scrivi il testo (EXACT working method)
-        await page.keyboard.type(quote_text)
-        await page.wait_for_timeout(1000)
+        # Type text with human-like delays
+        await page.keyboard.type(quote_text, delay=random.randint(40, 120))
+        await page.wait_for_timeout(random.randint(1500, 3000))
         
         # Screenshot dopo aver inserito il testo
         await save_debug_info(page, 'after_text_input')
@@ -707,8 +701,8 @@ async def run_quote_campaign(tweet_url: str, users_to_tag: List[str], message: s
                     log_message(f"Quote failed for {account['username']}")
 
                 await browser.close()
-                # Random delay between accounts
-                await asyncio.sleep(random.randint(10, 30))
+                # Longer random delay between accounts to avoid detection
+                await asyncio.sleep(random.randint(30, 90))
 
             except Exception as e:
                 log_message(f"Error with account {account['username']}: {e}")

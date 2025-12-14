@@ -51,6 +51,36 @@
                         </div>
                         
                         <div class="mt-2">
+                            <small class="text-muted">Quick Templates:</small>
+                            <div class="row mt-1">
+                                <div class="col-md-4">
+                                    <div class="card template-card" style="cursor: pointer; border: 2px solid #e9ecef;">
+                                        <div class="card-body p-2 text-center">
+                                            <div class="template-emoji">🚀💎</div>
+                                            <small class="text-muted">Community Update</small>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-4">
+                                    <div class="card template-card" style="cursor: pointer; border: 2px solid #e9ecef;">
+                                        <div class="card-body p-2 text-center">
+                                            <div class="template-emoji">🎉🎁</div>
+                                            <small class="text-muted">Appreciation</small>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-4">
+                                    <div class="card template-card" style="cursor: pointer; border: 2px solid #e9ecef;">
+                                        <div class="card-body p-2 text-center">
+                                            <div class="template-emoji">🔥⚡</div>
+                                            <small class="text-muted">Discussion</small>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="mt-2">
                             <small class="text-muted">Preview:</small>
                             <div id="message_preview" class="border rounded p-2 bg-light small" style="min-height: 60px;"></div>
                         </div>
@@ -190,11 +220,45 @@ document.addEventListener('DOMContentLoaded', function() {
         textarea.focus();
     }
     
-    // Update message preview
+    // Track used tags
+    let usedTags = new Set();
+    
+    // Update message preview and check for unused tags
     function updatePreview() {
         const users = usersInput.value.split(',').map(u => u.trim()).filter(u => u);
-        const tagsText = users.map(u => '@' + u).join(' ');
-        let preview = messageTemplate.value.replace('{TAGS}', tagsText);
+        const messageText = messageTemplate.value;
+        
+        // Find all @mentions in the message
+        const mentionRegex = /@(\w+)/g;
+        const foundMentions = new Set();
+        let match;
+        while ((match = mentionRegex.exec(messageText)) !== null) {
+            foundMentions.add(match[1]);
+        }
+        
+        // Handle {TAGS} placeholder
+        let preview = messageText;
+        if (messageText.includes('{TAGS}')) {
+            const tagsText = users.map(u => '@' + u).join(' ');
+            preview = messageText.replace('{TAGS}', tagsText);
+            // Mark all users as used if {TAGS} is present
+            users.forEach(u => foundMentions.add(u));
+        }
+        
+        // Check for unused tags
+        const unusedTags = users.filter(u => !foundMentions.has(u));
+        if (unusedTags.length > 0) {
+            const warningDiv = document.getElementById('unused_warning') || document.createElement('div');
+            warningDiv.id = 'unused_warning';
+            warningDiv.className = 'alert alert-warning mt-2';
+            warningDiv.innerHTML = `<i class="fas fa-exclamation-triangle"></i> Unused tags: ${unusedTags.map(u => '@' + u).join(', ')}`;
+            if (!document.getElementById('unused_warning')) {
+                messageTemplate.parentNode.appendChild(warningDiv);
+            }
+        } else {
+            const warningDiv = document.getElementById('unused_warning');
+            if (warningDiv) warningDiv.remove();
+        }
         
         if (!preview.trim()) {
             preview = '<em class="text-muted">Preview will appear here...</em>';
@@ -223,6 +287,70 @@ document.addEventListener('DOMContentLoaded', function() {
         updatePreview();
     });
     
+    // Template definitions
+    const templates = {
+        crypto: `📢 Community Update: New project announcement
+
+Thanks for being part of our community! 
+
+👥 Tagging active members: {TAGS}
+
+#Community #Update #Crypto`,
+        
+        giveaway: `🎁 Community Appreciation Event
+
+Thank you for your continued support!
+Check out this opportunity.
+
+🏆 Mentioning: {TAGS}
+
+#Community #Appreciation #Event`,
+        
+        hype: `📈 Interesting development in the space
+
+Thought you might find this relevant.
+What are your thoughts?
+
+💭 CC: {TAGS}
+
+#Discussion #Crypto #Thoughts`
+    };
+    
+    // Template click handlers
+    document.querySelectorAll('.template-card').forEach((card, index) => {
+        const templateKeys = ['crypto', 'giveaway', 'hype'];
+        const templateKey = templateKeys[index];
+        
+        card.addEventListener('click', function() {
+            // Remove active class from all cards
+            document.querySelectorAll('.template-card').forEach(c => {
+                c.style.border = '2px solid #e9ecef';
+                c.style.backgroundColor = '';
+            });
+            
+            // Highlight selected card
+            this.style.border = '2px solid #007bff';
+            this.style.backgroundColor = '#f8f9fa';
+            
+            // Set template text
+            messageTemplate.value = templates[templateKey];
+            updatePreview();
+        });
+        
+        // Hover effects
+        card.addEventListener('mouseenter', function() {
+            if (this.style.border !== '2px solid #007bff') {
+                this.style.border = '2px solid #6c757d';
+            }
+        });
+        
+        card.addEventListener('mouseleave', function() {
+            if (this.style.border !== '2px solid #007bff') {
+                this.style.border = '2px solid #e9ecef';
+            }
+        });
+    });
+    
     // Add {TAGS} button
     const tagsButton = document.createElement('button');
     tagsButton.type = 'button';
@@ -237,6 +365,20 @@ document.addEventListener('DOMContentLoaded', function() {
     // Event listeners
     usersInput.addEventListener('input', updateAvailableTags);
     messageTemplate.addEventListener('input', updatePreview);
+    
+    // CSS for template emojis
+    const style = document.createElement('style');
+    style.textContent = `
+        .template-emoji {
+            font-size: 24px;
+            margin-bottom: 5px;
+        }
+        .template-card:hover {
+            transform: translateY(-2px);
+            transition: all 0.2s ease;
+        }
+    `;
+    document.head.appendChild(style);
     
     // Initial update
     updateAvailableTags();
