@@ -31,17 +31,34 @@
 
                     <div class="mb-3">
                         <label class="form-label">Users to Tag</label>
-                        <input type="text" class="form-control" name="users_to_tag" id="users_input"
-                               placeholder="user1, user2, user3" required>
+                        <div class="input-group">
+                            <input type="text" class="form-control" name="users_to_tag" id="users_input"
+                                   placeholder="user1, user2, user3" required>
+                            <button type="button" class="btn btn-outline-secondary" id="import_file_btn">
+                                <i class="fas fa-file-upload"></i> Import File
+                            </button>
+                            <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#scrapingModal">
+                                <i class="fas fa-users"></i> Scrape Followers
+                            </button>
+                        </div>
+                        <input type="file" id="file_input" accept=".txt,.csv" style="display: none;">
+                        
                         <div class="form-text">
                             Comma-separated list of usernames to tag (without @)<br>
-                            <small class="text-success">✨ <strong>Unlimited users supported!</strong> Large lists will be automatically split into multiple posts (max 10 tags each)</small>
+                            <small class="text-success">✨ <strong>Unlimited users supported!</strong> Duplicates automatically removed. Large lists split into multiple posts (max 10 tags each)</small>
                         </div>
                         
                         <div class="mt-2" id="batch_info" style="display: none;">
                             <div class="alert alert-info small">
                                 <i class="fas fa-info-circle"></i>
                                 <span id="batch_details"></span>
+                            </div>
+                        </div>
+                        
+                        <div class="mt-2" id="duplicates_info" style="display: none;">
+                            <div class="alert alert-warning small">
+                                <i class="fas fa-exclamation-triangle"></i>
+                                <span id="duplicates_details"></span>
                             </div>
                         </div>
                         
@@ -52,12 +69,17 @@
                     </div>
 
                     <div class="mb-3">
-                        <label class="form-label">Message Template</label>
-                        <textarea class="form-control" name="message" id="message_template" rows="4" 
+                        <label class="form-label">Message Template <span class="text-danger">*</span></label>
+                        <textarea class="form-control" name="message" id="message_template" rows="4" required
                                   placeholder="🔥 Don't miss your chance to join the WET airdrop! #WET #SOL&#10;https://x.com/i/communities/1998500948134559892 $WET&#10;&#10;🪂 eligible users: {TAGS}"></textarea>
                         <div class="form-text">
+                            <strong>Minimum 80 characters required</strong> to avoid AI detection.<br>
                             Use <code>{TAGS}</code> placeholder where you want the tagged users to appear.
                             <br><small class="text-muted">Drag tags from above into the message or type {TAGS} manually.</small>
+                        </div>
+                        
+                        <div class="mt-1">
+                            <small class="text-muted">Character count: <span id="char_count" class="text-danger">0</span>/80 minimum</small>
                         </div>
                         
                         <div class="mt-2">
@@ -188,6 +210,70 @@
         {% endif %}
     </div>
 </div>
+
+<!-- Scraping Modal -->
+<div class="modal fade" id="scrapingModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="fas fa-users"></i> Scrape Followers</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div id="scraping_form">
+                    <div class="mb-3">
+                        <label class="form-label">Target Account</label>
+                        <input type="text" class="form-control" id="target_account" placeholder="binance">
+                        <div class="form-text">Username to scrape followers from (without @)</div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">Max Users</label>
+                        <input type="number" class="form-control" id="max_users" value="100" min="10" max="1000">
+                        <div class="form-text">Maximum number of followers to scrape (10-1000)</div>
+                    </div>
+                    
+                    <button type="button" class="btn btn-primary" id="start_scraping">
+                        <i class="fas fa-play"></i> Start Scraping
+                    </button>
+                </div>
+                
+                <div id="scraping_progress" style="display: none;">
+                    <div class="alert alert-info">
+                        <i class="fas fa-spinner fa-spin"></i> Scraping in progress...
+                    </div>
+                    <div class="progress mb-3">
+                        <div class="progress-bar" id="scraping_progress_bar" style="width: 0%"></div>
+                    </div>
+                    <div class="text-center">
+                        <span id="scraping_status">Starting...</span>
+                    </div>
+                    <div class="text-center mt-2">
+                        <button type="button" class="btn btn-danger btn-sm" id="stop_scraping">
+                            <i class="fas fa-stop"></i> Stop Scraping
+                        </button>
+                    </div>
+                </div>
+                
+                {% if scraped_accounts %}
+                <div class="mt-4">
+                    <h6>Previously Scraped Accounts:</h6>
+                    <div class="list-group">
+                        {% for account in scraped_accounts %}
+                        <div class="list-group-item d-flex justify-content-between align-items-center">
+                            <span>@{{ account }}</span>
+                            <button type="button" class="btn btn-sm btn-outline-primary load-scraped" data-account="{{ account }}">
+                                <i class="fas fa-download"></i> Load Users
+                            </button>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -204,8 +290,21 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Update available tags when users input changes
     function updateAvailableTags() {
-        const users = usersInput.value.split(',').map(u => u.trim()).filter(u => u);
+        const rawUsers = usersInput.value.split(',').map(u => u.trim()).filter(u => u);
+        const users = [...new Set(rawUsers)]; // Remove duplicates
         availableTags.innerHTML = '';
+        
+        // Update duplicate info
+        const duplicatesInfo = document.getElementById('duplicates_info');
+        const duplicatesDetails = document.getElementById('duplicates_details');
+        const duplicatesCount = rawUsers.length - users.length;
+        
+        if (duplicatesCount > 0) {
+            duplicatesInfo.style.display = 'block';
+            duplicatesDetails.textContent = `${duplicatesCount} duplicate users removed`;
+        } else {
+            duplicatesInfo.style.display = 'none';
+        }
         
         // Update batch info
         const batchInfo = document.getElementById('batch_info');
@@ -403,9 +502,153 @@ What are your thoughts?
     });
     messageTemplate.parentNode.insertBefore(tagsButton, messageTemplate.nextSibling);
     
+    // Character count update
+    function updateCharCount() {
+        const count = messageTemplate.value.length;
+        const charCountSpan = document.getElementById('char_count');
+        charCountSpan.textContent = count;
+        
+        if (count < 80) {
+            charCountSpan.className = 'text-danger';
+        } else {
+            charCountSpan.className = 'text-success';
+        }
+    }
+    
+    // File import functionality
+    document.getElementById('import_file_btn').addEventListener('click', function() {
+        document.getElementById('file_input').click();
+    });
+    
+    document.getElementById('file_input').addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (file) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const content = e.target.result;
+                const users = [];
+                
+                content.split('\n').forEach(line => {
+                    line = line.trim();
+                    if (line && !line.startsWith('#')) {
+                        if (line.includes(',')) {
+                            users.push(...line.split(',').map(u => u.trim().replace('@', '')).filter(u => u));
+                        } else {
+                            users.push(line.replace('@', ''));
+                        }
+                    }
+                });
+                
+                if (users.length > 0) {
+                    const currentUsers = usersInput.value ? usersInput.value.split(',').map(u => u.trim()).filter(u => u) : [];
+                    const allUsers = [...currentUsers, ...users];
+                    usersInput.value = allUsers.join(', ');
+                    updateAvailableTags();
+                    alert(`Imported ${users.length} users from file`);
+                } else {
+                    alert('No valid users found in file');
+                }
+            };
+            reader.readAsText(file);
+        }
+    });
+    
+    // Scraping functionality
+    let scrapingInterval;
+    
+    document.getElementById('start_scraping').addEventListener('click', function() {
+        const targetAccount = document.getElementById('target_account').value.trim();
+        const maxUsers = parseInt(document.getElementById('max_users').value);
+        
+        if (!targetAccount) {
+            alert('Please enter a target account');
+            return;
+        }
+        
+        // Start scraping
+        fetch('/campaign/scrape-followers', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: `target_account=${encodeURIComponent(targetAccount)}&max_users=${maxUsers}`
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                document.getElementById('scraping_form').style.display = 'none';
+                document.getElementById('scraping_progress').style.display = 'block';
+                
+                // Start polling for progress
+                scrapingInterval = setInterval(checkScrapingProgress, 2000);
+            } else {
+                alert('Error: ' + data.error);
+            }
+        });
+    });
+    
+    function checkScrapingProgress() {
+        fetch('/api/scraping-status')
+        .then(response => response.json())
+        .then(data => {
+            if (data.is_running) {
+                const progress = data.total > 0 ? (data.progress / data.total) * 100 : 0;
+                document.getElementById('scraping_progress_bar').style.width = progress + '%';
+                document.getElementById('scraping_status').textContent = `Scraped ${data.progress}/${data.total} users`;
+            } else {
+                clearInterval(scrapingInterval);
+                document.getElementById('scraping_progress').style.display = 'none';
+                document.getElementById('scraping_form').style.display = 'block';
+                alert('Scraping completed!');
+                location.reload(); // Refresh to show new scraped account
+            }
+        });
+    }
+    
+    document.getElementById('stop_scraping').addEventListener('click', function() {
+        fetch('/scraping/stop', {method: 'POST'})
+        .then(() => {
+            clearInterval(scrapingInterval);
+            document.getElementById('scraping_progress').style.display = 'none';
+            document.getElementById('scraping_form').style.display = 'block';
+        });
+    });
+    
+    // Load scraped users
+    document.querySelectorAll('.load-scraped').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const account = this.dataset.account;
+            
+            fetch(`/api/scraped-users/${account}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.users && data.users.length > 0) {
+                    const currentUsers = usersInput.value ? usersInput.value.split(',').map(u => u.trim()).filter(u => u) : [];
+                    const newUsers = data.users.filter(u => !data.targeted.includes(u));
+                    const allUsers = [...currentUsers, ...newUsers];
+                    usersInput.value = allUsers.join(', ');
+                    updateAvailableTags();
+                    
+                    // Mark as targeted
+                    fetch('/api/mark-targeted', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({account_name: account, users: newUsers})
+                    });
+                    
+                    alert(`Loaded ${newUsers.length} new users from @${account}`);
+                    document.querySelector('[data-bs-dismiss="modal"]').click();
+                } else {
+                    alert('No users available for this account');
+                }
+            });
+        });
+    });
+    
     // Event listeners
     usersInput.addEventListener('input', updateAvailableTags);
-    messageTemplate.addEventListener('input', updatePreview);
+    messageTemplate.addEventListener('input', function() {
+        updatePreview();
+        updateCharCount();
+    });
     
     // CSS for template emojis
     const style = document.createElement('style');
@@ -421,8 +664,9 @@ What are your thoughts?
     `;
     document.head.appendChild(style);
     
-    // Initial update
+    // Initial updates
     updateAvailableTags();
+    updateCharCount();
 });
 </script>
 {% endblock %}

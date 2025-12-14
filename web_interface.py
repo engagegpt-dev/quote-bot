@@ -51,7 +51,9 @@ class QuoteRequest(BaseModel):
 bot_state = {
     "is_running": False,
     "last_campaign": None,
-    "logs": []
+    "logs": [],
+    "scraped_users": {},  # {account_name: {users: [], targeted: []}}
+    "scraping_status": {"is_running": False, "progress": 0, "total": 0}
 }
 
 def load_accounts():
@@ -63,6 +65,29 @@ def load_accounts():
 def save_accounts(accounts):
     with open("accounts.json", "w") as f:
         json.dump(accounts, f, indent=2)
+
+def load_scraped_users():
+    if os.path.exists("scraped_users.json"):
+        with open("scraped_users.json", "r") as f:
+            return json.load(f)
+    return {}
+
+def save_scraped_users(data):
+    with open("scraped_users.json", "w") as f:
+        json.dump(data, f, indent=2)
+
+def parse_users_from_file(content: str) -> List[str]:
+    """Parse users from uploaded file content"""
+    users = []
+    for line in content.splitlines():
+        line = line.strip()
+        if line and not line.startswith('#'):
+            # Handle different formats: @username, username, or comma-separated
+            if ',' in line:
+                users.extend([u.strip().lstrip('@') for u in line.split(',') if u.strip()])
+            else:
+                users.append(line.lstrip('@'))
+    return list(dict.fromkeys(users))  # Remove duplicates
 
 def log_message(message: str):
     timestamp = datetime.now().isoformat()
@@ -260,12 +285,76 @@ async def toggle_account_form(account_id: int, user: str = Depends(authenticate)
 async def campaign_page(request: Request, user: str = Depends(authenticate)):
     accounts = load_accounts()
     active_accounts = [acc for acc in accounts if acc.get("active", True)]
+    scraped_data = load_scraped_users()
     
     return templates.TemplateResponse("campaign.html", {
         "request": request,
         "accounts": active_accounts,
-        "is_running": bot_state["is_running"]
+        "is_running": bot_state["is_running"],
+        "scraped_accounts": list(scraped_data.keys()),
+        "scraping_status": bot_state["scraping_status"]
     })
+
+@app.post("/campaign/import-file")
+async def import_users_from_file(
+    request: Request,
+    file: bytes = Form(...),
+    user: str = Depends(authenticate)
+):
+    try:
+        content = file.decode('utf-8')
+        users = parse_users_from_file(content)
+        
+        if users:
+            log_message(f"Imported {len(users)} users from file")
+            return {"success": True, "users": users, "count": len(users)}
+        else:
+            return {"success": False, "error": "No valid users found in file"}
+    except Exception as e:
+        log_message(f"File import error: {e}")
+        return {"success": False, "error": str(e)}
+
+@app.post("/campaign/scrape-followers")
+async def scrape_followers(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    target_account: str = Form(...),
+    max_users: int = Form(100),
+    user: str = Depends(authenticate)
+):
+    if bot_state["scraping_status"]["is_running"]:
+        return {"success": False, "error": "Scraping already in progress"}
+    
+    target_account = target_account.strip().lstrip('@')
+    
+    background_tasks.add_task(scrape_account_followers, target_account, max_users)
+    
+    return {"success": True, "message": f"Started scraping followers of @{target_account}"}
+
+@app.get("/api/scraping-status")
+async def get_scraping_status():
+    return bot_state["scraping_status"]
+
+@app.get("/api/scraped-users/{account_name}")
+async def get_scraped_users(account_name: str):
+    scraped_data = load_scraped_users()
+    if account_name in scraped_data:
+        return scraped_data[account_name]
+    return {"users": [], "targeted": []}
+
+@app.post("/api/mark-targeted")
+async def mark_users_as_targeted(request: Request):
+    data = await request.json()
+    account_name = data.get("account_name")
+    users = data.get("users", [])
+    
+    scraped_data = load_scraped_users()
+    if account_name in scraped_data:
+        scraped_data[account_name]["targeted"].extend(users)
+        scraped_data[account_name]["targeted"] = list(set(scraped_data[account_name]["targeted"]))
+        save_scraped_users(scraped_data)
+        
+    return {"success": True}
 
 @app.post("/campaign/start")
 async def start_campaign_form(
@@ -284,11 +373,31 @@ async def start_campaign_form(
             "accounts": load_accounts()
         })
     
-    # Parse users to tag - support large lists
-    users_list = [user.strip() for user in users_to_tag.split(",") if user.strip()]
+    # Validate message length (minimum 80 characters to avoid AI detection)
+    if len(message.strip()) < 80:
+        return templates.TemplateResponse("campaign.html", {
+            "request": request,
+            "error": f"Message too short! Minimum 80 characters required to avoid AI detection. Current: {len(message.strip())} characters",
+            "accounts": load_accounts()
+        })
+    
+    # Parse and clean users - remove duplicates (case sensitive) and empty entries
+    raw_users = [user.strip() for user in users_to_tag.split(",") if user.strip()]
+    users_list = list(dict.fromkeys(raw_users))  # Remove duplicates while preserving order
+    
+    duplicates_removed = len(raw_users) - len(users_list)
+    if duplicates_removed > 0:
+        log_message(f"Removed {duplicates_removed} duplicate users")
+    
+    if not users_list:
+        return templates.TemplateResponse("campaign.html", {
+            "request": request,
+            "error": "No valid users to tag provided",
+            "accounts": load_accounts()
+        })
     
     # Log campaign details
-    log_message(f"Starting batch campaign: {len(users_list)} users to tag")
+    log_message(f"Starting batch campaign: {len(users_list)} unique users to tag")
     log_message(f"Will create {(len(users_list) + 9) // 10} posts with max 10 tags each")
     
     background_tasks.add_task(
@@ -306,6 +415,12 @@ async def stop_campaign_form(user: str = Depends(authenticate)):
     bot_state["is_running"] = False
     log_message("Campaign stopped by user")
     return RedirectResponse(url="/", status_code=303)
+
+@app.post("/scraping/stop")
+async def stop_scraping_form(user: str = Depends(authenticate)):
+    bot_state["scraping_status"]["is_running"] = False
+    log_message("Scraping stopped by user")
+    return RedirectResponse(url="/campaign", status_code=303)
 
 # Bot Logic (same as before)
 async def login_with_auth_token(context, auth_token: str):
@@ -743,6 +858,129 @@ async def run_batch_quote_campaign(tweet_url: str, users_to_tag: List[str], mess
     bot_state["is_running"] = False
     log_message(f"Batch campaign completed. Success: {success_count}/{total_posts} posts")
 
+async def scrape_account_followers(target_account: str, max_users: int = 100):
+    """Scrape followers of a target account"""
+    bot_state["scraping_status"] = {"is_running": True, "progress": 0, "total": max_users}
+    
+    log_message(f"Starting to scrape followers of @{target_account} (max: {max_users})")
+    
+    scraped_users = []
+    
+    try:
+        async with async_playwright() as p:
+            # Use first available account for scraping
+            accounts = load_accounts()
+            active_accounts = [acc for acc in accounts if acc.get("active", True)]
+            
+            if not active_accounts:
+                log_message("No active accounts available for scraping")
+                bot_state["scraping_status"]["is_running"] = False
+                return
+            
+            account = active_accounts[0]
+            
+            try:
+                browser = await p.chromium.launch(
+                    headless=False,
+                    args=[
+                        '--no-first-run',
+                        '--disable-blink-features=AutomationControlled',
+                        '--disable-web-security',
+                        '--disable-dev-shm-usage',
+                        '--no-sandbox'
+                    ]
+                )
+            except Exception as e:
+                log_message(f"Headed browser failed, using headless: {e}")
+                browser = await p.chromium.launch(
+                    headless=True,
+                    args=[
+                        '--no-first-run',
+                        '--disable-blink-features=AutomationControlled',
+                        '--disable-web-security',
+                        '--disable-dev-shm-usage',
+                        '--no-sandbox',
+                        '--disable-gpu'
+                    ]
+                )
+            
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                viewport={'width': 1920, 'height': 1080}
+            )
+            page = await context.new_page()
+            
+            # Login
+            login_success = await login_with_auth_token(context, account["auth_token"])
+            
+            if not login_success:
+                login_success = await login_with_credentials(
+                    page, account["username"], account["password"], account["totp_secret"]
+                )
+            
+            if not login_success:
+                log_message(f"Login failed for scraping with account {account['username']}")
+                await browser.close()
+                bot_state["scraping_status"]["is_running"] = False
+                return
+            
+            # Navigate to followers page
+            followers_url = f"https://x.com/{target_account}/followers"
+            await page.goto(followers_url)
+            await page.wait_for_timeout(3000)
+            
+            # Scrape followers
+            seen_users = set()
+            scroll_attempts = 0
+            max_scrolls = 20
+            
+            while len(scraped_users) < max_users and scroll_attempts < max_scrolls and bot_state["scraping_status"]["is_running"]:
+                # Find user elements
+                user_elements = await page.query_selector_all('[data-testid="UserCell"]')
+                
+                for element in user_elements:
+                    if len(scraped_users) >= max_users:
+                        break
+                    
+                    try:
+                        # Extract username
+                        username_elem = await element.query_selector('[data-testid="User-Name"] a')
+                        if username_elem:
+                            href = await username_elem.get_attribute('href')
+                            if href and href.startswith('/'):
+                                username = href[1:]  # Remove leading /
+                                if username not in seen_users and username != target_account:
+                                    seen_users.add(username)
+                                    scraped_users.append(username)
+                                    bot_state["scraping_status"]["progress"] = len(scraped_users)
+                                    
+                                    if len(scraped_users) % 10 == 0:
+                                        log_message(f"Scraped {len(scraped_users)} followers so far...")
+                    except Exception as e:
+                        continue
+                
+                # Scroll down
+                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                await page.wait_for_timeout(2000)
+                scroll_attempts += 1
+            
+            await browser.close()
+            
+            # Save scraped data
+            scraped_data = load_scraped_users()
+            scraped_data[target_account] = {
+                "users": scraped_users,
+                "targeted": scraped_data.get(target_account, {}).get("targeted", [])
+            }
+            save_scraped_users(scraped_data)
+            
+            log_message(f"Scraping completed: {len(scraped_users)} followers of @{target_account}")
+            
+    except Exception as e:
+        log_message(f"Scraping error: {e}")
+    
+    bot_state["scraping_status"]["is_running"] = False
+
 async def run_quote_campaign(tweet_url: str, users_to_tag: List[str], message: str, account_ids: List[int] = None):
     bot_state["is_running"] = True
     bot_state["last_campaign"] = datetime.now().isoformat()
@@ -867,21 +1105,29 @@ async def start_quote_campaign_api(request: QuoteRequest, background_tasks: Back
     if bot_state["is_running"]:
         raise HTTPException(status_code=400, detail="Campaign already running")
     
+    # Validate message length
+    if len(request.message.strip()) < 80:
+        raise HTTPException(status_code=400, detail=f"Message too short! Minimum 80 characters required. Current: {len(request.message.strip())}")
+    
+    # Remove duplicates from users list
+    users_list = list(dict.fromkeys(request.users_to_tag))
+    
     # Use batch campaign for API too
     background_tasks.add_task(
         run_batch_quote_campaign,
         request.tweet_url,
-        request.users_to_tag,
-        request.message or "",
+        users_list,
+        request.message,
         request.account_ids
     )
     
-    total_posts = (len(request.users_to_tag) + 9) // 10
+    total_posts = (len(users_list) + 9) // 10
     return {
         "message": "Batch campaign started", 
         "status": "success",
-        "total_users": len(request.users_to_tag),
-        "total_posts": total_posts
+        "total_users": len(users_list),
+        "total_posts": total_posts,
+        "duplicates_removed": len(request.users_to_tag) - len(users_list)
     }
 
 @app.get("/api/status")
