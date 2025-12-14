@@ -497,12 +497,18 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
         # Aspetta che il modal si carichi
         await page.wait_for_timeout(2000)
         
-        # Selettori per "Add a comment" basati sull'HTML fornito
+        # Selettori multilingue per "Add a comment" / "Ajouter un commentaire"
         textarea_selectors = [
             '[data-testid="tweetTextarea_0"][role="textbox"]',
             '.public-DraftEditor-content[data-testid="tweetTextarea_0"]',
             '[aria-describedby*="placeholder"][contenteditable="true"]',
-            'div[aria-label="Post text"][contenteditable="true"]'
+            'div[aria-label="Post text"][contenteditable="true"]',
+            'div[aria-label="Texte du post"][contenteditable="true"]',  # French
+            '[placeholder*="Ajouter un commentaire"][contenteditable="true"]',  # French placeholder
+            '[aria-placeholder*="Ajouter un commentaire"][contenteditable="true"]',
+            'div[contenteditable="true"][data-testid="tweetTextarea_0"]',
+            '.notranslate[contenteditable="true"]',
+            '[role="textbox"][contenteditable="true"]'
         ]
         
         textarea = None
@@ -523,7 +529,7 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
             await save_debug_info(page, 'textarea_not_found')
             return False
             
-        # Simple working textarea interaction (RESTORED)
+        # Multiple click attempts
         await textarea.click()
         await page.wait_for_timeout(500)
         
@@ -542,9 +548,30 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
             if message:
                 quote_text += message
 
-        # Simple working text typing (RESTORED)
-        await page.keyboard.type(quote_text)
+        log_message(f"Typing text: {quote_text}")
+        
+        # Multiple text input methods
+        try:
+            # Method 1: Clear and type
+            await page.keyboard.press('Control+a')
+            await page.keyboard.type(quote_text)
+        except:
+            try:
+                # Method 2: Focus and type
+                await textarea.focus()
+                await page.keyboard.type(quote_text)
+            except:
+                # Method 3: JavaScript injection
+                await page.evaluate(f'document.querySelector("{found_selector}").innerText = "{quote_text}"')
+        
         await page.wait_for_timeout(1000)
+        
+        # Verify text was inserted
+        try:
+            text_content = await page.evaluate(f'document.querySelector("{found_selector}").innerText')
+            log_message(f"Text in textarea after typing: {text_content}")
+        except:
+            log_message("Could not verify text content")
         
         # Screenshot dopo aver inserito il testo
         await save_debug_info(page, 'after_text_input')
