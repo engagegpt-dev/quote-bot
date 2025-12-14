@@ -645,16 +645,32 @@ async def run_quote_campaign(tweet_url: str, users_to_tag: List[str], message: s
             try:
                 log_message(f"Processing account: {account['username']}")
                 
-                browser = await p.chromium.launch(
-                    headless=False,
-                    args=[
-                        '--no-first-run',
-                        '--disable-blink-features=AutomationControlled',
-                        '--disable-web-security',
-                        '--disable-dev-shm-usage',
-                        '--no-sandbox'
-                    ]
-                )
+                # Try headed first, fallback to headless if no display
+                try:
+                    browser = await p.chromium.launch(
+                        headless=False,
+                        args=[
+                            '--no-first-run',
+                            '--disable-blink-features=AutomationControlled',
+                            '--disable-web-security',
+                            '--disable-dev-shm-usage',
+                            '--no-sandbox'
+                        ]
+                    )
+                except Exception as e:
+                    log_message(f"Headed browser failed, using headless: {e}")
+                    browser = await p.chromium.launch(
+                        headless=True,
+                        args=[
+                            '--no-first-run',
+                            '--disable-blink-features=AutomationControlled',
+                            '--disable-web-security',
+                            '--disable-dev-shm-usage',
+                            '--no-sandbox',
+                            '--disable-gpu',
+                            '--virtual-time-budget=5000'
+                        ]
+                    )
                 context = await browser.new_context(
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                     viewport={'width': 1920, 'height': 1080},
