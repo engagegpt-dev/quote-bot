@@ -425,24 +425,19 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
         except Exception as e:
             log_message(f"Error reading page.url: {e}")
 
-        # Trova SOLO il retweet button del post principale (ignora commenti)
+        # Scroll in cima per assicurarsi di vedere il post principale
+        await page.evaluate('window.scrollTo(0, 0)')
+        await page.wait_for_timeout(1000)
+        
+        # Trova tutti i retweet button e usa il primo (post principale)
         retweet_btn = None
         try:
-            # Cerca il primo articolo (post principale) e il suo retweet button
-            main_article = await page.wait_for_selector('article[data-testid="tweet"]:first-of-type', timeout=5000)
-            if main_article:
-                retweet_btn = await main_article.query_selector('[data-testid="retweet"]')
-                log_message("Found retweet button in main tweet")
+            all_retweet_btns = await page.query_selector_all('[data-testid="retweet"]')
+            if all_retweet_btns:
+                retweet_btn = all_retweet_btns[0]  # Il primo è sempre il post principale
+                log_message(f"Found {len(all_retweet_btns)} retweet buttons, using first one (main tweet)")
         except Exception as e:
-            log_message(f"Error finding main tweet retweet button: {e}")
-        
-        # Fallback: cerca il primo retweet button nella pagina
-        if not retweet_btn:
-            try:
-                retweet_btn = await page.wait_for_selector('[data-testid="retweet"]:first-of-type', timeout=4000)
-                log_message("Using first retweet button as fallback")
-            except:
-                pass
+            log_message(f"Error finding retweet buttons: {e}")
 
         if not retweet_btn:
             log_message("Repost/retweet button not found")
