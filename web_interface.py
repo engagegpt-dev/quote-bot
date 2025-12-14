@@ -40,6 +40,7 @@ class Account(BaseModel):
     auth_token: str
     totp_secret: str
     registration_year: int
+    verified: Optional[bool] = False
 
 class QuoteRequest(BaseModel):
     tweet_url: str
@@ -130,6 +131,7 @@ async def add_account_form(
     auth_token: str = Form(...),
     totp_secret: str = Form(...),
     registration_year: int = Form(...),
+    verified: bool = Form(False),
     user: str = Depends(authenticate)
 ):
     accounts = load_accounts()
@@ -150,6 +152,7 @@ async def add_account_form(
         "auth_token": auth_token,
         "totp_secret": totp_secret,
         "registration_year": registration_year,
+        "verified": verified,
         "active": True
     }
     
@@ -341,6 +344,57 @@ async def get_scraped_users(account_name: str):
     if account_name in scraped_data:
         return scraped_data[account_name]
     return {"users": [], "targeted": []}
+
+@app.get("/download/scraped-users/{account_name}")
+async def download_scraped_users(account_name: str, format: str = "txt"):
+    """Download scraped users as optimized file"""
+    from fastapi.responses import Response
+    
+    scraped_data = load_scraped_users()
+    if account_name not in scraped_data:
+        raise HTTPException(status_code=404, detail="Account not found")
+    
+    users = scraped_data[account_name].get("users", [])
+    targeted = scraped_data[account_name].get("targeted", [])
+    available_users = [u for u in users if u not in targeted]
+    
+    if format == "csv":
+        content = "username\n" + "\n".join(available_users)
+        return Response(
+            content=content,
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={account_name}_followers.csv"}
+        )
+    else:
+        content = "\n".join(available_users)
+        return Response(
+            content=content,
+            media_type="text/plain",
+            headers={"Content-Disposition": f"attachment; filename={account_name}_followers.txt"}
+        )
+
+@app.post("/api/select-scraped-users")
+async def select_scraped_users(request: Request):
+    """Select specific number of users"""
+    data = await request.json()
+    account_name = data.get("account_name")
+    count = data.get("count", 100)
+    
+    scraped_data = load_scraped_users()
+    if account_name not in scraped_data:
+        return {"success": False, "error": "Account not found"}
+    
+    users = scraped_data[account_name].get("users", [])
+    targeted = scraped_data[account_name].get("targeted", [])
+    available_users = [u for u in users if u not in targeted]
+    selected_users = available_users[:count]
+    
+    return {
+        "success": True,
+        "users": selected_users,
+        "total_available": len(available_users),
+        "selected_count": len(selected_users)
+    }
 
 @app.post("/api/mark-targeted")
 async def mark_users_as_targeted(request: Request):
@@ -725,7 +779,7 @@ def chunk_users(users_list: List[str], chunk_size: int = 10) -> List[List[str]]:
     return chunks
 
 async def run_batch_quote_campaign(tweet_url: str, users_to_tag: List[str], message: str, account_ids: List[int] = None):
-    """Run campaign with automatic chunking for large user lists"""
+    """Run campaign with correct account distribution logic"""
     bot_state["is_running"] = True
     bot_state["last_campaign"] = datetime.now().isoformat()
     
@@ -747,18 +801,12 @@ async def run_batch_quote_campaign(tweet_url: str, users_to_tag: List[str], mess
         return
     
     success_count = 0
-    account_index = 0
     
     async with async_playwright() as p:
-        for chunk_num, user_chunk in enumerate(user_chunks, 1):
-            if not bot_state["is_running"]:
-                break
-            
-            # Cycle through accounts
-            account = active_accounts[account_index % len(active_accounts)]
-            account_index += 1
-            
-            log_message(f"Post {chunk_num}/{total_posts}: Tagging {len(user_chunk)} users with account {account['username']}")
+        if len(active_accounts) == 1:
+            # SINGLE ACCOUNT: Use same account for all posts
+            account = active_accounts[0]
+            log_message(f"Single account mode: {account['username']} will handle all {total_posts} posts")
             
             try:
                 # Browser setup
@@ -801,7 +849,7 @@ async def run_batch_quote_campaign(tweet_url: str, users_to_tag: List[str], mess
                 await context.add_init_script("Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]})")
                 await context.add_init_script("Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']})")
 
-                # Login
+                # Login ONCE
                 login_success = await login_with_auth_token(context, account["auth_token"])
                 
                 if login_success:
@@ -823,37 +871,177 @@ async def run_batch_quote_campaign(tweet_url: str, users_to_tag: List[str], mess
                     )
 
                 if not login_success:
-                    log_message(f"Login failed for {account['username']}, skipping chunk {chunk_num}")
+                    log_message(f"Login failed for {account['username']}")
                     await browser.close()
-                    continue
+                    bot_state["is_running"] = False
+                    return
 
-                # Use twitter.com
+                # Process all chunks with same account
                 tweet_url_fixed = tweet_url.replace("x.com", "twitter.com")
-                await page.goto("https://twitter.com/home")
-                await page.wait_for_timeout(2000)
                 
-                # Post with current chunk
-                success = await quote_retweet(page, tweet_url_fixed, user_chunk, message)
-                if success:
-                    success_count += 1
-                    log_message(f"Post {chunk_num}/{total_posts} successful by {account['username']}")
-                else:
-                    log_message(f"Post {chunk_num}/{total_posts} failed for {account['username']}")
+                for chunk_num, user_chunk in enumerate(user_chunks, 1):
+                    if not bot_state["is_running"]:
+                        break
+                    
+                    log_message(f"Post {chunk_num}/{total_posts}: Tagging {len(user_chunk)} users with {account['username']}")
+                    
+                    # Navigate to home first (refresh session)
+                    await page.goto("https://twitter.com/home")
+                    await page.wait_for_timeout(2000)
+                    
+                    # Post with current chunk
+                    success = await quote_retweet(page, tweet_url_fixed, user_chunk, message)
+                    if success:
+                        success_count += 1
+                        log_message(f"Post {chunk_num}/{total_posts} successful")
+                    else:
+                        log_message(f"Post {chunk_num}/{total_posts} failed")
+                    
+                    # Delay between posts
+                    if chunk_num < total_posts:
+                        delay = random.randint(60, 120)  # 1-2 minutes between posts
+                        log_message(f"Waiting {delay}s before next post...")
+                        await asyncio.sleep(delay)
 
                 await browser.close()
                 
-                # Delay between posts (longer for same account)
-                if chunk_num < total_posts:  # Don't wait after last post
-                    delay = random.randint(60, 120)  # 1-2 minutes between posts
-                    log_message(f"Waiting {delay}s before next post...")
-                    await asyncio.sleep(delay)
-
             except Exception as e:
-                log_message(f"Error in chunk {chunk_num} with account {account['username']}: {e}")
+                log_message(f"Error with single account {account['username']}: {e}")
                 try:
                     await browser.close()
                 except:
                     pass
+        
+        else:
+            # MULTIPLE ACCOUNTS: Distribute posts across accounts
+            log_message(f"Multi-account mode: Distributing {total_posts} posts across {len(active_accounts)} accounts")
+            
+            # Group chunks by account
+            chunks_per_account = {}
+            for i, chunk in enumerate(user_chunks):
+                account_index = i % len(active_accounts)
+                account = active_accounts[account_index]
+                if account["id"] not in chunks_per_account:
+                    chunks_per_account[account["id"]] = {"account": account, "chunks": []}
+                chunks_per_account[account["id"]]["chunks"].append((i + 1, chunk))
+            
+            # Process each account's chunks
+            for account_data in chunks_per_account.values():
+                if not bot_state["is_running"]:
+                    break
+                    
+                account = account_data["account"]
+                account_chunks = account_data["chunks"]
+                
+                log_message(f"Processing {len(account_chunks)} posts with account {account['username']}")
+                
+                try:
+                    # Browser setup - ONE per account
+                    try:
+                        browser = await p.chromium.launch(
+                            headless=False,
+                            args=[
+                                '--no-first-run',
+                                '--disable-blink-features=AutomationControlled',
+                                '--disable-web-security',
+                                '--disable-dev-shm-usage',
+                                '--no-sandbox'
+                            ]
+                        )
+                    except Exception as e:
+                        log_message(f"Headed browser failed, using headless: {e}")
+                        browser = await p.chromium.launch(
+                            headless=True,
+                            args=[
+                                '--no-first-run',
+                                '--disable-blink-features=AutomationControlled',
+                                '--disable-web-security',
+                                '--disable-dev-shm-usage',
+                                '--no-sandbox',
+                                '--disable-gpu',
+                                '--virtual-time-budget=5000'
+                            ]
+                        )
+                    
+                    context = await browser.new_context(
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        viewport={'width': 1920, 'height': 1080},
+                        locale='en-US',
+                        timezone_id='America/New_York'
+                    )
+                    page = await context.new_page()
+                    
+                    # Remove automation traces
+                    await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+                    await context.add_init_script("Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]})")
+                    await context.add_init_script("Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']})")
+
+                    # Login ONCE per account
+                    login_success = await login_with_auth_token(context, account["auth_token"])
+                    
+                    if login_success:
+                        await page.goto("https://x.com/home")
+                        await page.wait_for_timeout(3000)
+                        
+                        try:
+                            await page.wait_for_selector('[data-testid="SideNav_NewTweet_Button"]', timeout=5000)
+                            log_message(f"Auth token login successful for {account['username']}")
+                        except:
+                            login_success = False
+
+                    if not login_success:
+                        login_success = await login_with_credentials(
+                            page, 
+                            account["username"], 
+                            account["password"], 
+                            account["totp_secret"]
+                        )
+
+                    if not login_success:
+                        log_message(f"Login failed for {account['username']}, skipping this account")
+                        await browser.close()
+                        continue
+
+                    # Process all chunks for this account
+                    tweet_url_fixed = tweet_url.replace("x.com", "twitter.com")
+                    
+                    for chunk_num, user_chunk in account_chunks:
+                        if not bot_state["is_running"]:
+                            break
+                        
+                        log_message(f"Post {chunk_num}/{total_posts}: Tagging {len(user_chunk)} users with {account['username']}")
+                        
+                        # Navigate to home first (refresh session)
+                        await page.goto("https://twitter.com/home")
+                        await page.wait_for_timeout(2000)
+                        
+                        # Post with current chunk
+                        success = await quote_retweet(page, tweet_url_fixed, user_chunk, message)
+                        if success:
+                            success_count += 1
+                            log_message(f"Post {chunk_num}/{total_posts} successful by {account['username']}")
+                        else:
+                            log_message(f"Post {chunk_num}/{total_posts} failed for {account['username']}")
+                        
+                        # Delay between posts from same account
+                        delay = random.randint(60, 120)  # 1-2 minutes between posts
+                        log_message(f"Waiting {delay}s before next post...")
+                        await asyncio.sleep(delay)
+
+                    await browser.close()
+                    log_message(f"Completed all posts for account {account['username']}")
+                    
+                    # Delay between accounts
+                    delay = random.randint(30, 60)  # 30s-1min between accounts
+                    log_message(f"Switching accounts, waiting {delay}s...")
+                    await asyncio.sleep(delay)
+
+                except Exception as e:
+                    log_message(f"Error with account {account['username']}: {e}")
+                    try:
+                        await browser.close()
+                    except:
+                        pass
 
     bot_state["is_running"] = False
     log_message(f"Batch campaign completed. Success: {success_count}/{total_posts} posts")

@@ -129,11 +129,26 @@
                                            value="{{ account.id }}" id="account{{ account.id }}" checked>
                                     <label class="form-check-label" for="account{{ account.id }}">
                                         @{{ account.username }}
+                                        {% if account.get('verified') %}
+                                        <i class="fas fa-check-circle text-primary" title="Verified account"></i>
+                                        {% endif %}
                                         <small class="text-muted">({{ account.registration_year }})</small>
                                     </label>
                                 </div>
                             </div>
                             {% endfor %}
+                        </div>
+                        
+                        <div class="mt-2">
+                            <button type="button" class="btn btn-sm btn-outline-primary" onclick="selectVerifiedOnly()">
+                                <i class="fas fa-check-circle"></i> Select Verified Only
+                            </button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="selectAllAccounts()">
+                                <i class="fas fa-users"></i> Select All
+                            </button>
+                            <button type="button" class="btn btn-sm btn-outline-warning" onclick="deselectAllAccounts()">
+                                <i class="fas fa-times"></i> Deselect All
+                            </button>
                         </div>
                         <div class="form-text">Select which accounts to use for the campaign</div>
                         {% else %}
@@ -260,11 +275,39 @@
                     <h6>Previously Scraped Accounts:</h6>
                     <div class="list-group">
                         {% for account in scraped_accounts %}
-                        <div class="list-group-item d-flex justify-content-between align-items-center">
-                            <span>@{{ account }}</span>
-                            <button type="button" class="btn btn-sm btn-outline-primary load-scraped" data-account="{{ account }}">
-                                <i class="fas fa-download"></i> Load Users
-                            </button>
+                        <div class="list-group-item">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <span><strong>@{{ account }}</strong></span>
+                                <div class="btn-group" role="group">
+                                    <button type="button" class="btn btn-sm btn-outline-success" onclick="showUserSelector('{{ account }}')">
+                                        <i class="fas fa-filter"></i> Select
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-outline-primary load-scraped" data-account="{{ account }}">
+                                        <i class="fas fa-plus"></i> Load All
+                                    </button>
+                                    <div class="btn-group" role="group">
+                                        <button type="button" class="btn btn-sm btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown">
+                                            <i class="fas fa-download"></i>
+                                        </button>
+                                        <ul class="dropdown-menu">
+                                            <li><a class="dropdown-item" href="/download/scraped-users/{{ account }}?format=txt">Download TXT</a></li>
+                                            <li><a class="dropdown-item" href="/download/scraped-users/{{ account }}?format=csv">Download CSV</a></li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            </div>
+                            <div id="selector_{{ account }}" class="user-selector" style="display: none;">
+                                <div class="row g-2 mb-2">
+                                    <div class="col-md-6">
+                                        <input type="number" class="form-control form-control-sm" placeholder="How many users?" value="100" id="count_{{ account }}">
+                                    </div>
+                                    <div class="col-md-6">
+                                        <button type="button" class="btn btn-sm btn-success w-100" onclick="selectFilteredUsers('{{ account }}')">
+                                            <i class="fas fa-check"></i> Select Users
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                         {% endfor %}
                     </div>
@@ -475,6 +518,7 @@ What are your thoughts?
             // Set template text
             messageTemplate.value = templates[templateKey];
             updatePreview();
+            updateCharCount(); // Add this line to update character count
         });
         
         // Hover effects
@@ -643,6 +687,46 @@ What are your thoughts?
         });
     });
     
+    // User selector functions
+    window.showUserSelector = function(account) {
+        const selector = document.getElementById(`selector_${account}`);
+        selector.style.display = selector.style.display === 'none' ? 'block' : 'none';
+    };
+    
+    window.selectFilteredUsers = function(account) {
+        const count = parseInt(document.getElementById(`count_${account}`).value) || 100;
+        
+        fetch('/api/select-scraped-users', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                account_name: account,
+                count: count
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const currentUsers = usersInput.value ? usersInput.value.split(',').map(u => u.trim()).filter(u => u) : [];
+                const allUsers = [...currentUsers, ...data.users];
+                usersInput.value = allUsers.join(', ');
+                updateAvailableTags();
+                
+                // Mark as targeted
+                fetch('/api/mark-targeted', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({account_name: account, users: data.users})
+                });
+                
+                alert(`Selected ${data.selected_count} users from @${account} (${data.total_available} available)`);
+                document.querySelector('[data-bs-dismiss="modal"]').click();
+            } else {
+                alert('Error: ' + data.error);
+            }
+        });
+    };
+    
     // Event listeners
     usersInput.addEventListener('input', updateAvailableTags);
     messageTemplate.addEventListener('input', function() {
@@ -663,6 +747,26 @@ What are your thoughts?
         }
     `;
     document.head.appendChild(style);
+    
+    // Account selection functions
+    window.selectVerifiedOnly = function() {
+        const checkboxes = document.querySelectorAll('input[name="account_ids"]');
+        checkboxes.forEach(cb => {
+            const label = document.querySelector(`label[for="${cb.id}"]`);
+            const hasVerified = label.querySelector('.fa-check-circle');
+            cb.checked = hasVerified !== null;
+        });
+    };
+    
+    window.selectAllAccounts = function() {
+        const checkboxes = document.querySelectorAll('input[name="account_ids"]');
+        checkboxes.forEach(cb => cb.checked = true);
+    };
+    
+    window.deselectAllAccounts = function() {
+        const checkboxes = document.querySelectorAll('input[name="account_ids"]');
+        checkboxes.forEach(cb => cb.checked = false);
+    };
     
     // Initial updates
     updateAvailableTags();
