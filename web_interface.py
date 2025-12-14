@@ -811,32 +811,18 @@ async def run_batch_quote_campaign(tweet_url: str, users_to_tag: List[str], mess
             log_message(f"Single account mode: {account['username']} will handle all {total_posts} posts")
             
             try:
-                # Browser setup
-                try:
-                    browser = await p.chromium.launch(
-                        headless=False,
-                        args=[
-                            '--no-first-run',
-                            '--disable-blink-features=AutomationControlled',
-                            '--disable-web-security',
-                            '--disable-dev-shm-usage',
-                            '--no-sandbox'
-                        ]
-                    )
-                except Exception as e:
-                    log_message(f"Headed browser failed, using headless: {e}")
-                    browser = await p.chromium.launch(
-                        headless=True,
-                        args=[
-                            '--no-first-run',
-                            '--disable-blink-features=AutomationControlled',
-                            '--disable-web-security',
-                            '--disable-dev-shm-usage',
-                            '--no-sandbox',
-                            '--disable-gpu',
-                            '--virtual-time-budget=5000'
-                        ]
-                    )
+                # Browser setup - always use headless in server environments
+                browser = await p.chromium.launch(
+                    headless=True,
+                    args=[
+                        '--no-first-run',
+                        '--disable-blink-features=AutomationControlled',
+                        '--disable-web-security',
+                        '--disable-dev-shm-usage',
+                        '--no-sandbox',
+                        '--disable-gpu'
+                    ]
+                )
                 
                 context = await browser.new_context(
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -938,32 +924,18 @@ async def run_batch_quote_campaign(tweet_url: str, users_to_tag: List[str], mess
                 log_message(f"Processing {len(account_chunks)} posts with account {account['username']}")
                 
                 try:
-                    # Browser setup - ONE per account
-                    try:
-                        browser = await p.chromium.launch(
-                            headless=False,
-                            args=[
-                                '--no-first-run',
-                                '--disable-blink-features=AutomationControlled',
-                                '--disable-web-security',
-                                '--disable-dev-shm-usage',
-                                '--no-sandbox'
-                            ]
-                        )
-                    except Exception as e:
-                        log_message(f"Headed browser failed, using headless: {e}")
-                        browser = await p.chromium.launch(
-                            headless=True,
-                            args=[
-                                '--no-first-run',
-                                '--disable-blink-features=AutomationControlled',
-                                '--disable-web-security',
-                                '--disable-dev-shm-usage',
-                                '--no-sandbox',
-                                '--disable-gpu',
-                                '--virtual-time-budget=5000'
-                            ]
-                        )
+                    # Browser setup - always headless in server environments
+                    browser = await p.chromium.launch(
+                        headless=True,
+                        args=[
+                            '--no-first-run',
+                            '--disable-blink-features=AutomationControlled',
+                            '--disable-web-security',
+                            '--disable-dev-shm-usage',
+                            '--no-sandbox',
+                            '--disable-gpu'
+                        ]
+                    )
                     
                     context = await browser.new_context(
                         user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
