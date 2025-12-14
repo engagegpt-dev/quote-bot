@@ -8,6 +8,7 @@ from pydantic import BaseModel
 import asyncio
 import json
 import os
+import random
 from typing import List, Optional
 import uvicorn
 from datetime import datetime
@@ -40,6 +41,7 @@ class Account(BaseModel):
     auth_token: str
     totp_secret: str
     registration_year: int
+    verified: Optional[bool] = False
 
 class QuoteRequest(BaseModel):
     tweet_url: str
@@ -76,6 +78,19 @@ def load_scraped_users():
 def save_scraped_users(data):
     with open("scraped_users.json", "w") as f:
         json.dump(data, f, indent=2)
+
+def parse_users_from_file(content: str) -> List[str]:
+    """Parse users from uploaded file content"""
+    users = []
+    for line in content.splitlines():
+        line = line.strip()
+        if line and not line.startswith('#'):
+            # Handle different formats: @username, username, or comma-separated
+            if ',' in line:
+                users.extend([u.strip().lstrip('@') for u in line.split(',') if u.strip()])
+            else:
+                users.append(line.lstrip('@'))
+    return list(dict.fromkeys(users))  # Remove duplicates
 
 def log_message(message: str):
     timestamp = datetime.now().isoformat()
@@ -118,6 +133,7 @@ async def add_account_form(
     auth_token: str = Form(...),
     totp_secret: str = Form(...),
     registration_year: int = Form(...),
+    verified: bool = Form(False),
     user: str = Depends(authenticate)
 ):
     accounts = load_accounts()
@@ -138,6 +154,7 @@ async def add_account_form(
         "auth_token": auth_token,
         "totp_secret": totp_secret,
         "registration_year": registration_year,
+        "verified": verified,
         "active": True
     }
     
@@ -283,6 +300,118 @@ async def campaign_page(request: Request, user: str = Depends(authenticate)):
         "scraping_status": bot_state["scraping_status"]
     })
 
+@app.post("/campaign/import-file")
+async def import_users_from_file(
+    request: Request,
+    file: bytes = Form(...),
+    user: str = Depends(authenticate)
+):
+    try:
+        content = file.decode('utf-8')
+        users = parse_users_from_file(content)
+        
+        if users:
+            log_message(f"Imported {len(users)} users from file")
+            return {"success": True, "users": users, "count": len(users)}
+        else:
+            return {"success": False, "error": "No valid users found in file"}
+    except Exception as e:
+        log_message(f"File import error: {e}")
+        return {"success": False, "error": str(e)}
+
+@app.post("/campaign/scrape-followers")
+async def scrape_followers(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    target_account: str = Form(...),
+    max_users: int = Form(100),
+    user: str = Depends(authenticate)
+):
+    if bot_state["scraping_status"]["is_running"]:
+        return {"success": False, "error": "Scraping already in progress"}
+    
+    target_account = target_account.strip().lstrip('@')
+    
+    background_tasks.add_task(scrape_account_followers, target_account, max_users)
+    
+    return {"success": True, "message": f"Started scraping followers of @{target_account}"}
+
+@app.get("/api/scraping-status")
+async def get_scraping_status():
+    return bot_state["scraping_status"]
+
+@app.get("/api/scraped-users/{account_name}")
+async def get_scraped_users(account_name: str):
+    scraped_data = load_scraped_users()
+    if account_name in scraped_data:
+        return scraped_data[account_name]
+    return {"users": [], "targeted": []}
+
+@app.get("/download/scraped-users/{account_name}")
+async def download_scraped_users(account_name: str, format: str = "txt"):
+    """Download scraped users as optimized file"""
+    from fastapi.responses import Response
+    
+    scraped_data = load_scraped_users()
+    if account_name not in scraped_data:
+        raise HTTPException(status_code=404, detail="Account not found")
+    
+    users = scraped_data[account_name].get("users", [])
+    targeted = scraped_data[account_name].get("targeted", [])
+    available_users = [u for u in users if u not in targeted]
+    
+    if format == "csv":
+        content = "username\n" + "\n".join(available_users)
+        return Response(
+            content=content,
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={account_name}_followers.csv"}
+        )
+    else:
+        content = "\n".join(available_users)
+        return Response(
+            content=content,
+            media_type="text/plain",
+            headers={"Content-Disposition": f"attachment; filename={account_name}_followers.txt"}
+        )
+
+@app.post("/api/select-scraped-users")
+async def select_scraped_users(request: Request):
+    """Select specific number of users"""
+    data = await request.json()
+    account_name = data.get("account_name")
+    count = data.get("count", 100)
+    
+    scraped_data = load_scraped_users()
+    if account_name not in scraped_data:
+        return {"success": False, "error": "Account not found"}
+    
+    users = scraped_data[account_name].get("users", [])
+    targeted = scraped_data[account_name].get("targeted", [])
+    available_users = [u for u in users if u not in targeted]
+    selected_users = available_users[:count]
+    
+    return {
+        "success": True,
+        "users": selected_users,
+        "total_available": len(available_users),
+        "selected_count": len(selected_users)
+    }
+
+@app.post("/api/mark-targeted")
+async def mark_users_as_targeted(request: Request):
+    data = await request.json()
+    account_name = data.get("account_name")
+    users = data.get("users", [])
+    
+    scraped_data = load_scraped_users()
+    if account_name in scraped_data:
+        scraped_data[account_name]["targeted"].extend(users)
+        scraped_data[account_name]["targeted"] = list(set(scraped_data[account_name]["targeted"]))
+        save_scraped_users(scraped_data)
+        
+    return {"success": True}
+
 @app.post("/campaign/start")
 async def start_campaign_form(
     request: Request,
@@ -300,11 +429,35 @@ async def start_campaign_form(
             "accounts": load_accounts()
         })
     
-    # Parse users to tag
-    users_list = [user.strip() for user in users_to_tag.split(",") if user.strip()]
+    # Validate message length (minimum 80 characters to avoid AI detection)
+    if len(message.strip()) < 80:
+        return templates.TemplateResponse("campaign.html", {
+            "request": request,
+            "error": f"Message too short! Minimum 80 characters required to avoid AI detection. Current: {len(message.strip())} characters",
+            "accounts": load_accounts()
+        })
+    
+    # Parse and clean users - remove duplicates (case sensitive) and empty entries
+    raw_users = [user.strip() for user in users_to_tag.split(",") if user.strip()]
+    users_list = list(dict.fromkeys(raw_users))  # Remove duplicates while preserving order
+    
+    duplicates_removed = len(raw_users) - len(users_list)
+    if duplicates_removed > 0:
+        log_message(f"Removed {duplicates_removed} duplicate users")
+    
+    if not users_list:
+        return templates.TemplateResponse("campaign.html", {
+            "request": request,
+            "error": "No valid users to tag provided",
+            "accounts": load_accounts()
+        })
+    
+    # Log campaign details
+    log_message(f"Starting batch campaign: {len(users_list)} unique users to tag")
+    log_message(f"Will create {(len(users_list) + 9) // 10} posts with max 10 tags each")
     
     background_tasks.add_task(
-        run_quote_campaign,
+        run_batch_quote_campaign,
         tweet_url,
         users_list,
         message,
@@ -318,6 +471,12 @@ async def stop_campaign_form(user: str = Depends(authenticate)):
     bot_state["is_running"] = False
     log_message("Campaign stopped by user")
     return RedirectResponse(url="/", status_code=303)
+
+@app.post("/scraping/stop")
+async def stop_scraping_form(user: str = Depends(authenticate)):
+    bot_state["scraping_status"]["is_running"] = False
+    log_message("Scraping stopped by user")
+    return RedirectResponse(url="/campaign", status_code=303)
 
 # Bot Logic (same as before)
 async def login_with_auth_token(context, auth_token: str):
@@ -412,7 +571,7 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
         log_message(f"Processing tweet: {tweet_url}")
         # Navigate and capture response status and final URL
         try:
-            response = await page.goto(tweet_url, wait_until='networkidle', timeout=60000)
+            response = await page.goto(tweet_url, wait_until='networkidle')
             if response:
                 status = response.status
                 log_message(f"Navigation response status: {status}")
@@ -420,14 +579,11 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
                 log_message("Navigation response: None")
         except Exception as e:
             log_message(f"Navigation error: {e}")
-            # Prova senza wait_until
             try:
-                await page.goto(tweet_url, timeout=30000)
-                log_message("Navigation successful on retry")
-            except Exception as e2:
-                log_message(f"Navigation retry failed: {e2}")
                 await save_debug_info(page, 'navigation_error')
-                return False
+            except:
+                pass
+            return False
         await page.wait_for_timeout(3000)
 
         # Check if we're on the correct tweet page
@@ -445,32 +601,34 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
         except Exception as e:
             log_message(f"Error reading page.url: {e}")
 
-        # Try multiple selectors for the retweet/repost button to be robust against UI changes
+        # Try multiple selectors for the retweet button
         retweet_selectors = [
             '[data-testid="retweet"]',
             '[aria-label="Repost"]',
+            '[aria-label="Repost this post"]',
             'div[data-testid="retweet"]',
             'button[data-testid="retweet"]'
         ]
-        retweet_btn = None
+
+        retweet_button = None
         for selector in retweet_selectors:
             try:
-                retweet_btn = await page.wait_for_selector(selector, timeout=4000)
-                if retweet_btn:
+                retweet_button = await page.wait_for_selector(selector, timeout=4000)
+                if retweet_button:
                     break
             except:
                 continue
 
-        if not retweet_btn:
-            log_message("Repost/retweet button not found")
+        if not retweet_button:
+            log_message("Repost button not found")
             await save_debug_info(page, 'retweet_button_not_found')
             return False
 
-        # Movimento mouse più umano prima del click
+        # Human-like hover and click
         await page.hover('[data-testid="retweet"]')
-        await page.wait_for_timeout(500)
-        await retweet_btn.click()
-        await page.wait_for_timeout(3000)
+        await page.wait_for_timeout(random.randint(800, 1500))
+        await retweet_button.click()
+        await page.wait_for_timeout(random.randint(2500, 4000))
         
         # Controlla se siamo ancora sul tweet
         current_url = page.url
@@ -500,19 +658,15 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
             await save_debug_info(page, 'quote_menuitem_not_found')
             return False
 
-        # Prova a cliccare direttamente usando JavaScript
-        log_message("Attempting to click Quote button with JavaScript")
-        try:
-            await page.evaluate('document.querySelector("a[href=\"/compose/post\"][role=\"menuitem\"]").click()')
-        except:
-            await quote_btn.click()
-        await page.wait_for_timeout(4000)
+        # Human-like quote button click
+        await quote_btn.click()
+        await page.wait_for_timeout(random.randint(2500, 4000))
         
         # Screenshot dopo aver cliccato quote
         await save_debug_info(page, 'after_quote_click')
         
         # Aspetta che il modal si carichi
-        await page.wait_for_timeout(2000)
+        await page.wait_for_timeout(3000)
         
         # Selettori per "Add a comment" basati sull'HTML fornito
         textarea_selectors = [
@@ -523,49 +677,88 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
         ]
         
         textarea = None
+        found_selector = None
         for sel in textarea_selectors:
             try:
                 textarea = await page.wait_for_selector(sel, timeout=2000)
                 if textarea:
+                    found_selector = sel
+                    log_message(f"Found textarea with selector: {sel}")
                     break
-            except:
+            except Exception as e:
+                log_message(f"Selector {sel} failed: {e}")
                 continue
 
         if not textarea:
-            log_message("Add a comment textarea not found")
+            log_message("Add a comment textarea not found with any selector")
             await save_debug_info(page, 'textarea_not_found')
             return False
             
+        # Simple working textarea interaction (RESTORED)
         await textarea.click()
         await page.wait_for_timeout(500)
         
-        # Costruisci il testo con i tag
-        quote_text = ""
-        for user in users_to_tag:
-            if not user.startswith('@'):
-                user = f"@{user}"
-            quote_text += f"{user} "
-        
-        if message:
-            quote_text += message
+        # Build final text with tags in message template (RESTORED WORKING LOGIC)
+        if "{TAGS}" in message:
+            # Replace {TAGS} placeholder with actual tags
+            tags_text = " ".join([f"@{user}" if not user.startswith('@') else user for user in users_to_tag])
+            quote_text = message.replace("{TAGS}", tags_text)
+        else:
+            # Fallback to old method if no {TAGS} placeholder
+            quote_text = ""
+            for user in users_to_tag:
+                if not user.startswith('@'):
+                    user = f"@{user}"
+                quote_text += f"{user} "
+            if message:
+                quote_text += message
 
-        # Scrivi il testo
+        # Simple working text typing (RESTORED)
         await page.keyboard.type(quote_text)
         await page.wait_for_timeout(1000)
         
         # Screenshot dopo aver inserito il testo
         await save_debug_info(page, 'after_text_input')
         
-        # Clicca sul bottone Post
-        post_btn = await page.wait_for_selector('button[data-testid="tweetButton"]', timeout=3000)
-        if post_btn:
-            await post_btn.click()
-            await page.wait_for_timeout(2000)
-            log_message("Post button clicked successfully")
-        else:
-            log_message("Post button not found")
-            await save_debug_info(page, 'post_button_not_found')
+        # Click post button with validation like original code
+        await page.wait_for_timeout(random.randint(500, 1000))
+        
+        post_button_selectors = [
+            'button[data-testid="tweetButtonInline"]',
+            'button[data-testid="tweetButton"]',
+            'div[data-testid="tweetButtonInline"]',
+            'div[data-testid="tweetButton"]',
+        ]
+
+        post_clicked = False
+        for sel in post_button_selectors:
+            try:
+                btns = await page.query_selector_all(sel)
+                for btn in btns:
+                    try:
+                        if not await btn.is_visible():
+                            continue
+                        aria_disabled = await btn.get_attribute('aria-disabled')
+                        disabled_attr = await btn.get_attribute('disabled')
+                        if aria_disabled == 'true' or disabled_attr is not None:
+                            continue
+                        await btn.click()
+                        post_clicked = True
+                        break
+                    except:
+                        continue
+                if post_clicked:
+                    break
+            except:
+                continue
+
+        if not post_clicked:
+            log_message("Post button not found or disabled")
+            await save_debug_info(page, 'post_button_disabled')
             return False
+        
+        log_message("Post button clicked successfully")
+        await page.wait_for_timeout(random.randint(2000, 4000))
         
         # Screenshot finale
         await save_debug_info(page, 'final_result')
@@ -579,6 +772,404 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
         except:
             pass
         return False
+
+def chunk_users(users_list: List[str], chunk_size: int = 10) -> List[List[str]]:
+    """Split users list into chunks of max chunk_size"""
+    chunks = []
+    for i in range(0, len(users_list), chunk_size):
+        chunks.append(users_list[i:i + chunk_size])
+    return chunks
+
+async def run_batch_quote_campaign(tweet_url: str, users_to_tag: List[str], message: str, account_ids: List[int] = None):
+    """Run campaign with correct account distribution logic"""
+    bot_state["is_running"] = True
+    bot_state["last_campaign"] = datetime.now().isoformat()
+    
+    # Split users into chunks of 10
+    user_chunks = chunk_users(users_to_tag, 10)
+    total_posts = len(user_chunks)
+    
+    log_message(f"Batch campaign: {len(users_to_tag)} users split into {total_posts} posts")
+    
+    accounts = load_accounts()
+    if account_ids:
+        accounts = [acc for acc in accounts if acc.get("id") in account_ids]
+    
+    active_accounts = [acc for acc in accounts if acc.get("active", True)]
+    
+    if not active_accounts:
+        log_message("No active accounts available")
+        bot_state["is_running"] = False
+        return
+    
+    success_count = 0
+    
+    async with async_playwright() as p:
+        if len(active_accounts) == 1:
+            # SINGLE ACCOUNT: Use same account for all posts
+            account = active_accounts[0]
+            log_message(f"Single account mode: {account['username']} will handle all {total_posts} posts")
+            
+            try:
+                # Browser setup
+                try:
+                    browser = await p.chromium.launch(
+                        headless=False,
+                        args=[
+                            '--no-first-run',
+                            '--disable-blink-features=AutomationControlled',
+                            '--disable-web-security',
+                            '--disable-dev-shm-usage',
+                            '--no-sandbox'
+                        ]
+                    )
+                except Exception as e:
+                    log_message(f"Headed browser failed, using headless: {e}")
+                    browser = await p.chromium.launch(
+                        headless=True,
+                        args=[
+                            '--no-first-run',
+                            '--disable-blink-features=AutomationControlled',
+                            '--disable-web-security',
+                            '--disable-dev-shm-usage',
+                            '--no-sandbox',
+                            '--disable-gpu',
+                            '--virtual-time-budget=5000'
+                        ]
+                    )
+                
+                context = await browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    viewport={'width': 1920, 'height': 1080},
+                    locale='en-US',
+                    timezone_id='America/New_York'
+                )
+                page = await context.new_page()
+                
+                # Remove automation traces
+                await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+                await context.add_init_script("Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]})")
+                await context.add_init_script("Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']})")
+
+                # Login ONCE
+                login_success = await login_with_auth_token(context, account["auth_token"])
+                
+                if login_success:
+                    await page.goto("https://x.com/home")
+                    await page.wait_for_timeout(3000)
+                    
+                    try:
+                        await page.wait_for_selector('[data-testid="SideNav_NewTweet_Button"]', timeout=5000)
+                        log_message(f"Auth token login successful for {account['username']}")
+                    except:
+                        login_success = False
+
+                if not login_success:
+                    login_success = await login_with_credentials(
+                        page, 
+                        account["username"], 
+                        account["password"], 
+                        account["totp_secret"]
+                    )
+
+                if not login_success:
+                    log_message(f"Login failed for {account['username']}")
+                    await browser.close()
+                    bot_state["is_running"] = False
+                    return
+
+                # Process all chunks with same account
+                tweet_url_fixed = tweet_url.replace("x.com", "twitter.com")
+                
+                for chunk_num, user_chunk in enumerate(user_chunks, 1):
+                    if not bot_state["is_running"]:
+                        break
+                    
+                    log_message(f"Post {chunk_num}/{total_posts}: Tagging {len(user_chunk)} users with {account['username']}")
+                    
+                    # Navigate to home first (refresh session)
+                    await page.goto("https://twitter.com/home")
+                    await page.wait_for_timeout(2000)
+                    
+                    # Post with current chunk
+                    success = await quote_retweet(page, tweet_url_fixed, user_chunk, message)
+                    if success:
+                        success_count += 1
+                        log_message(f"Post {chunk_num}/{total_posts} successful")
+                    else:
+                        log_message(f"Post {chunk_num}/{total_posts} failed")
+                    
+                    # Delay between posts
+                    if chunk_num < total_posts:
+                        delay = random.randint(60, 120)  # 1-2 minutes between posts
+                        log_message(f"Waiting {delay}s before next post...")
+                        await asyncio.sleep(delay)
+
+                await browser.close()
+                
+            except Exception as e:
+                log_message(f"Error with single account {account['username']}: {e}")
+                try:
+                    await browser.close()
+                except:
+                    pass
+        
+        else:
+            # MULTIPLE ACCOUNTS: Distribute posts across accounts
+            log_message(f"Multi-account mode: Distributing {total_posts} posts across {len(active_accounts)} accounts")
+            
+            # Group chunks by account
+            chunks_per_account = {}
+            for i, chunk in enumerate(user_chunks):
+                account_index = i % len(active_accounts)
+                account = active_accounts[account_index]
+                if account["id"] not in chunks_per_account:
+                    chunks_per_account[account["id"]] = {"account": account, "chunks": []}
+                chunks_per_account[account["id"]]["chunks"].append((i + 1, chunk))
+            
+            # Process each account's chunks
+            for account_data in chunks_per_account.values():
+                if not bot_state["is_running"]:
+                    break
+                    
+                account = account_data["account"]
+                account_chunks = account_data["chunks"]
+                
+                log_message(f"Processing {len(account_chunks)} posts with account {account['username']}")
+                
+                try:
+                    # Browser setup - ONE per account
+                    try:
+                        browser = await p.chromium.launch(
+                            headless=False,
+                            args=[
+                                '--no-first-run',
+                                '--disable-blink-features=AutomationControlled',
+                                '--disable-web-security',
+                                '--disable-dev-shm-usage',
+                                '--no-sandbox'
+                            ]
+                        )
+                    except Exception as e:
+                        log_message(f"Headed browser failed, using headless: {e}")
+                        browser = await p.chromium.launch(
+                            headless=True,
+                            args=[
+                                '--no-first-run',
+                                '--disable-blink-features=AutomationControlled',
+                                '--disable-web-security',
+                                '--disable-dev-shm-usage',
+                                '--no-sandbox',
+                                '--disable-gpu',
+                                '--virtual-time-budget=5000'
+                            ]
+                        )
+                    
+                    context = await browser.new_context(
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        viewport={'width': 1920, 'height': 1080},
+                        locale='en-US',
+                        timezone_id='America/New_York'
+                    )
+                    page = await context.new_page()
+                    
+                    # Remove automation traces
+                    await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+                    await context.add_init_script("Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]})")
+                    await context.add_init_script("Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']})")
+
+                    # Login ONCE per account
+                    login_success = await login_with_auth_token(context, account["auth_token"])
+                    
+                    if login_success:
+                        await page.goto("https://x.com/home")
+                        await page.wait_for_timeout(3000)
+                        
+                        try:
+                            await page.wait_for_selector('[data-testid="SideNav_NewTweet_Button"]', timeout=5000)
+                            log_message(f"Auth token login successful for {account['username']}")
+                        except:
+                            login_success = False
+
+                    if not login_success:
+                        login_success = await login_with_credentials(
+                            page, 
+                            account["username"], 
+                            account["password"], 
+                            account["totp_secret"]
+                        )
+
+                    if not login_success:
+                        log_message(f"Login failed for {account['username']}, skipping this account")
+                        await browser.close()
+                        continue
+
+                    # Process all chunks for this account
+                    tweet_url_fixed = tweet_url.replace("x.com", "twitter.com")
+                    
+                    for chunk_num, user_chunk in account_chunks:
+                        if not bot_state["is_running"]:
+                            break
+                        
+                        log_message(f"Post {chunk_num}/{total_posts}: Tagging {len(user_chunk)} users with {account['username']}")
+                        
+                        # Navigate to home first (refresh session)
+                        await page.goto("https://twitter.com/home")
+                        await page.wait_for_timeout(2000)
+                        
+                        # Post with current chunk
+                        success = await quote_retweet(page, tweet_url_fixed, user_chunk, message)
+                        if success:
+                            success_count += 1
+                            log_message(f"Post {chunk_num}/{total_posts} successful by {account['username']}")
+                        else:
+                            log_message(f"Post {chunk_num}/{total_posts} failed for {account['username']}")
+                        
+                        # Delay between posts from same account
+                        delay = random.randint(60, 120)  # 1-2 minutes between posts
+                        log_message(f"Waiting {delay}s before next post...")
+                        await asyncio.sleep(delay)
+
+                    await browser.close()
+                    log_message(f"Completed all posts for account {account['username']}")
+                    
+                    # Delay between accounts
+                    delay = random.randint(30, 60)  # 30s-1min between accounts
+                    log_message(f"Switching accounts, waiting {delay}s...")
+                    await asyncio.sleep(delay)
+
+                except Exception as e:
+                    log_message(f"Error with account {account['username']}: {e}")
+                    try:
+                        await browser.close()
+                    except:
+                        pass
+
+    bot_state["is_running"] = False
+    log_message(f"Batch campaign completed. Success: {success_count}/{total_posts} posts")
+
+async def scrape_account_followers(target_account: str, max_users: int = 100):
+    """Scrape followers of a target account"""
+    bot_state["scraping_status"] = {"is_running": True, "progress": 0, "total": max_users}
+    
+    log_message(f"Starting to scrape followers of @{target_account} (max: {max_users})")
+    
+    scraped_users = []
+    
+    try:
+        async with async_playwright() as p:
+            # Use first available account for scraping
+            accounts = load_accounts()
+            active_accounts = [acc for acc in accounts if acc.get("active", True)]
+            
+            if not active_accounts:
+                log_message("No active accounts available for scraping")
+                bot_state["scraping_status"]["is_running"] = False
+                return
+            
+            account = active_accounts[0]
+            
+            try:
+                browser = await p.chromium.launch(
+                    headless=False,
+                    args=[
+                        '--no-first-run',
+                        '--disable-blink-features=AutomationControlled',
+                        '--disable-web-security',
+                        '--disable-dev-shm-usage',
+                        '--no-sandbox'
+                    ]
+                )
+            except Exception as e:
+                log_message(f"Headed browser failed, using headless: {e}")
+                browser = await p.chromium.launch(
+                    headless=True,
+                    args=[
+                        '--no-first-run',
+                        '--disable-blink-features=AutomationControlled',
+                        '--disable-web-security',
+                        '--disable-dev-shm-usage',
+                        '--no-sandbox',
+                        '--disable-gpu'
+                    ]
+                )
+            
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                viewport={'width': 1920, 'height': 1080}
+            )
+            page = await context.new_page()
+            
+            # Login
+            login_success = await login_with_auth_token(context, account["auth_token"])
+            
+            if not login_success:
+                login_success = await login_with_credentials(
+                    page, account["username"], account["password"], account["totp_secret"]
+                )
+            
+            if not login_success:
+                log_message(f"Login failed for scraping with account {account['username']}")
+                await browser.close()
+                bot_state["scraping_status"]["is_running"] = False
+                return
+            
+            # Navigate to followers page
+            followers_url = f"https://x.com/{target_account}/followers"
+            await page.goto(followers_url)
+            await page.wait_for_timeout(3000)
+            
+            # Scrape followers
+            seen_users = set()
+            scroll_attempts = 0
+            max_scrolls = 20
+            
+            while len(scraped_users) < max_users and scroll_attempts < max_scrolls and bot_state["scraping_status"]["is_running"]:
+                # Find user elements
+                user_elements = await page.query_selector_all('[data-testid="UserCell"]')
+                
+                for element in user_elements:
+                    if len(scraped_users) >= max_users:
+                        break
+                    
+                    try:
+                        # Extract username
+                        username_elem = await element.query_selector('[data-testid="User-Name"] a')
+                        if username_elem:
+                            href = await username_elem.get_attribute('href')
+                            if href and href.startswith('/'):
+                                username = href[1:]  # Remove leading /
+                                if username not in seen_users and username != target_account:
+                                    seen_users.add(username)
+                                    scraped_users.append(username)
+                                    bot_state["scraping_status"]["progress"] = len(scraped_users)
+                                    
+                                    if len(scraped_users) % 10 == 0:
+                                        log_message(f"Scraped {len(scraped_users)} followers so far...")
+                    except Exception as e:
+                        continue
+                
+                # Scroll down
+                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                await page.wait_for_timeout(2000)
+                scroll_attempts += 1
+            
+            await browser.close()
+            
+            # Save scraped data
+            scraped_data = load_scraped_users()
+            scraped_data[target_account] = {
+                "users": scraped_users,
+                "targeted": scraped_data.get(target_account, {}).get("targeted", [])
+            }
+            save_scraped_users(scraped_data)
+            
+            log_message(f"Scraping completed: {len(scraped_users)} followers of @{target_account}")
+            
+    except Exception as e:
+        log_message(f"Scraping error: {e}")
+    
+    bot_state["scraping_status"]["is_running"] = False
 
 async def run_quote_campaign(tweet_url: str, users_to_tag: List[str], message: str, account_ids: List[int] = None):
     bot_state["is_running"] = True
@@ -604,22 +1195,44 @@ async def run_quote_campaign(tweet_url: str, users_to_tag: List[str], message: s
             try:
                 log_message(f"Processing account: {account['username']}")
                 
-                browser = await p.chromium.launch(
-                    headless=True,
-                    args=[
-                        '--no-first-run',
-                        '--disable-blink-features=AutomationControlled',
-                        '--disable-web-security'
-                    ]
-                )
+                # Try headed first, fallback to headless if no display
+                try:
+                    browser = await p.chromium.launch(
+                        headless=False,
+                        args=[
+                            '--no-first-run',
+                            '--disable-blink-features=AutomationControlled',
+                            '--disable-web-security',
+                            '--disable-dev-shm-usage',
+                            '--no-sandbox'
+                        ]
+                    )
+                except Exception as e:
+                    log_message(f"Headed browser failed, using headless: {e}")
+                    browser = await p.chromium.launch(
+                        headless=True,
+                        args=[
+                            '--no-first-run',
+                            '--disable-blink-features=AutomationControlled',
+                            '--disable-web-security',
+                            '--disable-dev-shm-usage',
+                            '--no-sandbox',
+                            '--disable-gpu',
+                            '--virtual-time-budget=5000'
+                        ]
+                    )
                 context = await browser.new_context(
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    viewport={'width': 1920, 'height': 1080}
+                    viewport={'width': 1920, 'height': 1080},
+                    locale='en-US',
+                    timezone_id='America/New_York'
                 )
                 page = await context.new_page()
                 
-                # Rimuovi tracce di automazione
+                # Remove automation traces like original code
                 await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+                await context.add_init_script("Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]})")
+                await context.add_init_script("Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']})")
 
                 login_success = await login_with_auth_token(context, account["auth_token"])
                 
@@ -667,7 +1280,8 @@ async def run_quote_campaign(tweet_url: str, users_to_tag: List[str], message: s
                     log_message(f"Quote failed for {account['username']}")
 
                 await browser.close()
-                await asyncio.sleep(5)
+                # Longer random delay between accounts to avoid detection
+                await asyncio.sleep(random.randint(30, 90))
 
             except Exception as e:
                 log_message(f"Error with account {account['username']}: {e}")
@@ -676,23 +1290,38 @@ async def run_quote_campaign(tweet_url: str, users_to_tag: List[str], message: s
     log_message(f"Campaign completed. Success: {success_count}/{len(active_accounts)}")
 
 # API Routes (for external access)
-@app.post("/api/quote/start")
-async def start_quote_campaign_api(request: QuoteRequest, background_tasks: BackgroundTasks, user: str = Depends(authenticate)):
+@app.post("/api/campaign/start")
+async def start_quote_campaign_api(request: QuoteRequest, background_tasks: BackgroundTasks):
     if bot_state["is_running"]:
         raise HTTPException(status_code=400, detail="Campaign already running")
     
+    # Validate message length
+    if len(request.message.strip()) < 80:
+        raise HTTPException(status_code=400, detail=f"Message too short! Minimum 80 characters required. Current: {len(request.message.strip())}")
+    
+    # Remove duplicates from users list
+    users_list = list(dict.fromkeys(request.users_to_tag))
+    
+    # Use batch campaign for API too
     background_tasks.add_task(
-        run_quote_campaign,
+        run_batch_quote_campaign,
         request.tweet_url,
-        request.users_to_tag,
-        request.message or "",
+        users_list,
+        request.message,
         request.account_ids
     )
     
-    return {"message": "Campaign started", "status": "success"}
+    total_posts = (len(users_list) + 9) // 10
+    return {
+        "message": "Batch campaign started", 
+        "status": "success",
+        "total_users": len(users_list),
+        "total_posts": total_posts,
+        "duplicates_removed": len(request.users_to_tag) - len(users_list)
+    }
 
 @app.get("/api/status")
-async def get_status_api(user: str = Depends(authenticate)):
+async def get_status_api():
     accounts = load_accounts()
     active_accounts = len([acc for acc in accounts if acc.get("active", True)])
     
@@ -704,7 +1333,7 @@ async def get_status_api(user: str = Depends(authenticate)):
     }
 
 @app.get("/api/logs")
-async def get_logs_api(user: str = Depends(authenticate)):
+async def get_logs_api():
     return {"logs": bot_state["logs"][-50:]}
 
 # Scraping endpoints
