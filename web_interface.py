@@ -717,8 +717,8 @@ async def run_quote_campaign(tweet_url: str, users_to_tag: List[str], message: s
     log_message(f"Campaign completed. Success: {success_count}/{len(active_accounts)}")
 
 # API Routes (for external access)
-@app.post("/api/quote/start")
-async def start_quote_campaign_api(request: QuoteRequest, background_tasks: BackgroundTasks, user: str = Depends(authenticate)):
+@app.post("/api/campaign/start")
+async def start_quote_campaign_api(request: QuoteRequest, background_tasks: BackgroundTasks):
     if bot_state["is_running"]:
         raise HTTPException(status_code=400, detail="Campaign already running")
     
@@ -733,7 +733,7 @@ async def start_quote_campaign_api(request: QuoteRequest, background_tasks: Back
     return {"message": "Campaign started", "status": "success"}
 
 @app.get("/api/status")
-async def get_status_api(user: str = Depends(authenticate)):
+async def get_status_api():
     accounts = load_accounts()
     active_accounts = len([acc for acc in accounts if acc.get("active", True)])
     
@@ -745,7 +745,7 @@ async def get_status_api(user: str = Depends(authenticate)):
     }
 
 @app.get("/api/logs")
-async def get_logs_api(user: str = Depends(authenticate)):
+async def get_logs_api():
     return {"logs": bot_state["logs"][-50:]}
 
 if __name__ == "__main__":
