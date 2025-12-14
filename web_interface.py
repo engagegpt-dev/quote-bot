@@ -8,6 +8,7 @@ from pydantic import BaseModel
 import asyncio
 import json
 import os
+import random
 from typing import List, Optional
 import uvicorn
 from datetime import datetime
@@ -448,8 +449,11 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
             await save_debug_info(page, 'retweet_button_not_found')
             return False
 
+        # Human-like hover and click
+        await page.hover('[data-testid="retweet"]')
+        await page.wait_for_timeout(random.randint(800, 1500))
         await retweet_button.click()
-        await page.wait_for_timeout(2500)
+        await page.wait_for_timeout(random.randint(2500, 4000))
         
         # Controlla se siamo ancora sul tweet
         current_url = page.url
@@ -479,14 +483,9 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
             await save_debug_info(page, 'quote_menuitem_not_found')
             return False
 
-        # Prova a cliccare direttamente usando JavaScript
-        log_message("Attempting to click Quote button with JavaScript")
-        await page.wait_for_timeout(1000)
-        try:
-            await page.evaluate('document.querySelector("a[href=\"/compose/post\"][role=\"menuitem\"]").click()')
-        except:
-            await quote_btn.click()
-        await page.wait_for_timeout(5000)
+        # Human-like quote button click
+        await quote_btn.click()
+        await page.wait_for_timeout(random.randint(2500, 4000))
         
         # Screenshot dopo aver cliccato quote
         await save_debug_info(page, 'after_quote_click')
@@ -516,8 +515,21 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
             await save_debug_info(page, 'textarea_not_found')
             return False
             
-        await textarea.click()
-        await page.wait_for_timeout(1000)
+        # Focus textarea with human behavior like original code
+        await page.click(textarea_selectors[0])
+        await asyncio.sleep(0.1)
+        # Clear any existing text
+        try:
+            await page.keyboard.press('Control+A')
+            await page.keyboard.press('Backspace')
+        except Exception:
+            try:
+                await page.keyboard.press('Meta+A')
+                await page.keyboard.press('Backspace')
+            except:
+                pass
+        await page.wait_for_timeout(random.randint(200, 500))
+        await page.focus(textarea_selectors[0])
         
         # Costruisci il testo con i tag
         quote_text = ""
@@ -529,25 +541,72 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
         if message:
             quote_text += message
 
-        # Scrivi il testo più lentamente
-        await page.keyboard.type(quote_text, delay=100)
-        await page.wait_for_timeout(2000)
+        # Type text like human with @mentions
+        words = quote_text.split(' ')
+        for idx, word in enumerate(words):
+            if word.startswith('@'):
+                # Type @mention character by character
+                for ch in word:
+                    await page.keyboard.type(ch, delay=random.randint(80, 150))
+                await page.wait_for_timeout(random.randint(500, 1000))
+                # Try to select first suggestion
+                try:
+                    suggestion = await page.wait_for_selector('[role="option"]', timeout=2000)
+                    if suggestion:
+                        await suggestion.click()
+                        await page.wait_for_timeout(random.randint(200, 500))
+                except:
+                    pass
+            else:
+                await page.keyboard.type(word, delay=random.randint(30, 80))
+            
+            if idx < len(words) - 1:
+                await page.keyboard.type(' ', delay=random.randint(20, 50))
+        
+        await page.wait_for_timeout(random.randint(1500, 3000))
         
         # Screenshot dopo aver inserito il testo
         await save_debug_info(page, 'after_text_input')
         
-        # Clicca sul bottone Post
-        await page.wait_for_timeout(1500)
-        try:
-            post_btn = await page.wait_for_selector('button[data-testid="tweetButton"]', timeout=5000)
-            if post_btn:
-                await post_btn.click()
-                await page.wait_for_timeout(4000)
-                log_message("Post button clicked successfully")
-            else:
-                log_message("Post button not found")
-        except Exception as e:
-            log_message(f"Post button error: {e}")
+        # Click post button with validation like original code
+        await page.wait_for_timeout(random.randint(500, 1000))
+        
+        post_button_selectors = [
+            'button[data-testid="tweetButtonInline"]',
+            'button[data-testid="tweetButton"]',
+            'div[data-testid="tweetButtonInline"]',
+            'div[data-testid="tweetButton"]',
+        ]
+
+        post_clicked = False
+        for sel in post_button_selectors:
+            try:
+                btns = await page.query_selector_all(sel)
+                for btn in btns:
+                    try:
+                        if not await btn.is_visible():
+                            continue
+                        aria_disabled = await btn.get_attribute('aria-disabled')
+                        disabled_attr = await btn.get_attribute('disabled')
+                        if aria_disabled == 'true' or disabled_attr is not None:
+                            continue
+                        await btn.click()
+                        post_clicked = True
+                        break
+                    except:
+                        continue
+                if post_clicked:
+                    break
+            except:
+                continue
+
+        if not post_clicked:
+            log_message("Post button not found or disabled")
+            await save_debug_info(page, 'post_button_disabled')
+            return False
+        
+        log_message("Post button clicked successfully")
+        await page.wait_for_timeout(random.randint(2000, 4000))
         
         # Screenshot finale
         await save_debug_info(page, 'final_result')
@@ -587,21 +646,27 @@ async def run_quote_campaign(tweet_url: str, users_to_tag: List[str], message: s
                 log_message(f"Processing account: {account['username']}")
                 
                 browser = await p.chromium.launch(
-                    headless=True,
+                    headless=False,
                     args=[
                         '--no-first-run',
                         '--disable-blink-features=AutomationControlled',
-                        '--disable-web-security'
+                        '--disable-web-security',
+                        '--disable-dev-shm-usage',
+                        '--no-sandbox'
                     ]
                 )
                 context = await browser.new_context(
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    viewport={'width': 1920, 'height': 1080}
+                    viewport={'width': 1920, 'height': 1080},
+                    locale='en-US',
+                    timezone_id='America/New_York'
                 )
                 page = await context.new_page()
                 
-                # Rimuovi tracce di automazione
+                # Remove automation traces like original code
                 await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+                await context.add_init_script("Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]})")
+                await context.add_init_script("Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']})")
 
                 login_success = await login_with_auth_token(context, account["auth_token"])
                 
@@ -649,7 +714,8 @@ async def run_quote_campaign(tweet_url: str, users_to_tag: List[str], message: s
                     log_message(f"Quote failed for {account['username']}")
 
                 await browser.close()
-                await asyncio.sleep(5)
+                # Random delay between accounts
+                await asyncio.sleep(random.randint(10, 30))
 
             except Exception as e:
                 log_message(f"Error with account {account['username']}: {e}")
