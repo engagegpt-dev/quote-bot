@@ -448,9 +448,9 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
 
         # Movimento mouse più umano prima del click
         await page.hover('[data-testid="retweet"]')
-        await page.wait_for_timeout(500)
+        await page.wait_for_timeout(1500)
         await retweet_btn.click()
-        await page.wait_for_timeout(3000)
+        await page.wait_for_timeout(4000)
         
         # Controlla se siamo ancora sul tweet
         current_url = page.url
@@ -482,17 +482,18 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
 
         # Prova a cliccare direttamente usando JavaScript
         log_message("Attempting to click Quote button with JavaScript")
+        await page.wait_for_timeout(1000)
         try:
             await page.evaluate('document.querySelector("a[href=\"/compose/post\"][role=\"menuitem\"]").click()')
         except:
             await quote_btn.click()
-        await page.wait_for_timeout(4000)
+        await page.wait_for_timeout(5000)
         
         # Screenshot dopo aver cliccato quote
         await save_debug_info(page, 'after_quote_click')
         
         # Aspetta che il modal si carichi
-        await page.wait_for_timeout(2000)
+        await page.wait_for_timeout(3000)
         
         # Selettori per "Add a comment" basati sull'HTML fornito
         textarea_selectors = [
@@ -517,7 +518,7 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
             return False
             
         await textarea.click()
-        await page.wait_for_timeout(500)
+        await page.wait_for_timeout(1000)
         
         # Costruisci il testo con i tag
         quote_text = ""
@@ -529,12 +530,25 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
         if message:
             quote_text += message
 
-        # Scrivi il testo
-        await page.keyboard.type(quote_text)
-        await page.wait_for_timeout(1000)
+        # Scrivi il testo più lentamente
+        await page.keyboard.type(quote_text, delay=100)
+        await page.wait_for_timeout(2000)
         
         # Screenshot dopo aver inserito il testo
         await save_debug_info(page, 'after_text_input')
+        
+        # Clicca sul bottone Post
+        await page.wait_for_timeout(1500)
+        try:
+            post_btn = await page.wait_for_selector('button[data-testid="tweetButton"]', timeout=5000)
+            if post_btn:
+                await post_btn.click()
+                await page.wait_for_timeout(4000)
+                log_message("Post button clicked successfully")
+            else:
+                log_message("Post button not found")
+        except Exception as e:
+            log_message(f"Post button error: {e}")
         
         # Screenshot finale
         await save_debug_info(page, 'final_result')
