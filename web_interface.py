@@ -431,16 +431,25 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
             # JavaScript per cliccare direttamente sul retweet del primo articolo
             js_result = await page.evaluate('''
             () => {
-                const articles = document.querySelectorAll('article[data-testid="tweet"]');
-                if (articles.length > 0) {
-                    const mainTweet = articles[0];
-                    const retweetBtn = mainTweet.querySelector('[data-testid="retweet"]');
-                    if (retweetBtn) {
-                        retweetBtn.click();
+                // Scroll in cima
+                window.scrollTo(0, 0);
+                
+                // Aspetta un momento
+                setTimeout(() => {
+                    // Trova tutti i retweet button
+                    const retweetBtns = document.querySelectorAll('[data-testid="retweet"]');
+                    console.log('Found retweet buttons:', retweetBtns.length);
+                    
+                    if (retweetBtns.length > 0) {
+                        // Clicca il primo (dovrebbe essere il post principale)
+                        retweetBtns[0].click();
+                        console.log('Clicked first retweet button');
                         return true;
                     }
-                }
-                return false;
+                    return false;
+                }, 500);
+                
+                return true; // Indica che il codice è stato eseguito
             }
             ''')
             if js_result:
