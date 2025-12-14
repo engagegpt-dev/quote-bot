@@ -694,17 +694,9 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
             await save_debug_info(page, 'textarea_not_found')
             return False
             
-        # Enhanced textarea interaction
-        log_message(f"Found textarea, attempting to click and focus")
+        # Simple working textarea interaction (RESTORED)
         await textarea.click()
         await page.wait_for_timeout(500)
-        
-        # Ensure textarea is focused
-        try:
-            await textarea.focus()
-            log_message("Textarea focused successfully")
-        except Exception as e:
-            log_message(f"Focus failed: {e}")
         
         # Build final text with tags in message template (RESTORED WORKING LOGIC)
         if "{TAGS}" in message:
@@ -721,47 +713,8 @@ async def quote_retweet(page, tweet_url: str, users_to_tag: List[str], message: 
             if message:
                 quote_text += message
 
-        # Multiple text input methods for reliability
-        log_message(f"Attempting to insert text: {quote_text[:50]}...")
-        
-        # Method 1: Direct fill
-        try:
-            await textarea.fill(quote_text)
-            log_message("Text inserted using fill method")
-        except Exception as e:
-            log_message(f"Fill method failed: {e}")
-            
-            # Method 2: Focus + keyboard type
-            try:
-                await textarea.focus()
-                await page.wait_for_timeout(500)
-                await page.keyboard.type(quote_text)
-                log_message("Text inserted using keyboard type")
-            except Exception as e2:
-                log_message(f"Keyboard type failed: {e2}")
-                
-                # Method 3: JavaScript injection
-                try:
-                    escaped_text = quote_text.replace('"', '\\"').replace('\n', '\\n')
-                    await page.evaluate(f'document.querySelector("{found_selector}").innerText = "{escaped_text}"')
-                    log_message("Text inserted using JavaScript")
-                except Exception as e3:
-                    log_message(f"JavaScript method failed: {e3}")
-                    
-                    # Method 4: Dispatch input event
-                    try:
-                        # Escape quotes in text for JavaScript
-                        escaped_text = quote_text.replace('"', '\\"').replace('\n', '\\n')
-                        await page.evaluate(f'''
-                            const element = document.querySelector("{found_selector}");
-                            element.focus();
-                            element.innerText = "{escaped_text}";
-                            element.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                        ''')
-                        log_message("Text inserted using dispatch event")
-                    except Exception as e4:
-                        log_message(f"All text input methods failed: {e4}")
-        
+        # Simple working text typing (RESTORED)
+        await page.keyboard.type(quote_text)
         await page.wait_for_timeout(1000)
         
         # Screenshot dopo aver inserito il testo
